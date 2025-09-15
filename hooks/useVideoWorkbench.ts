@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatFileSize, toTimecode } from "@/lib/format";
-import { SchemaType, Shot } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaType, Shot } from "@/lib/types";
 
 export type BusyPhase = "upload" | "generate" | "export";
 
@@ -54,6 +54,19 @@ type GeneratePayload = {
   enforceSchema: boolean;
   titleHint?: string;
   schemaType?: SchemaType;
+  promptMode?: PromptMode;
+  shots?: Array<{ id: string; timecode: string; label?: string; note?: string }>;
+  dspyOptions?: {
+    auto?: "light" | "medium" | "heavy";
+    maxMetricCalls?: number;
+    model?: string;
+    reflectionModel?: string;
+    temperature?: number;
+    reflectionTemperature?: number;
+    initialInstructions?: string;
+    timeoutMs?: number;
+    debug?: boolean;
+  };
 };
 
 export type UseVideoWorkbenchReturn = {
@@ -79,6 +92,9 @@ export type UseVideoWorkbenchReturn = {
   setSchemaType: (value: SchemaType) => void;
   titleHint: string;
   setTitleHint: (value: string) => void;
+  promptMode: PromptMode;
+  setPromptMode: (mode: PromptMode) => void;
+  promptMeta: PromptOptimizationMeta | null;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
   resultText: string | null;
@@ -134,6 +150,8 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const [enforceSchema, setEnforceSchema] = useState(true);
   const [schemaType, setSchemaType] = useState<SchemaType>("tutorial");
   const [titleHint, setTitleHint] = useState("");
+  const [promptModeState, setPromptModeState] = useState<PromptMode>("manual");
+  const [promptMeta, setPromptMeta] = useState<PromptOptimizationMeta | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [resultText, setResultText] = useState<string | null>(null);
@@ -146,6 +164,14 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const showToast = useCallback((type: ToastState["type"], message: string) => {
     setToast({ id: Date.now(), type, message });
   }, []);
+
+  const setPromptMode = useCallback(
+    (mode: PromptMode) => {
+      setPromptModeState(mode);
+      setPromptMeta(null);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -257,18 +283,11 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       if (file) {
         setVideoFile(file);
         setVideoUrl(URL.createObjectURL(file));
-        setVideoMetadata(null);
-        setVideoOnGemini(null);
-        setShots([]);
-        setResultText(null);
-        setLatestShotId(null);
-        setFlashShotId(null);
-        setResultTab("formatted");
-        nextShotIdRef.current = 1;
+        resetSelection();
         showToast("info", `Ready to work with ${file.name}`);
       }
     },
-    [showToast],
+    [resetSelection, showToast],
   );
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
@@ -288,6 +307,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setLatestShotId(null);
     setFlashShotId(null);
     setResultTab("formatted");
+    setPromptMeta(null);
     nextShotIdRef.current = 1;
   }, []);
 
@@ -379,6 +399,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setBusyPhase("generate");
     setResultText(null);
     setResultTab("formatted");
+    setPromptMeta(null);
     showToast("info", "Preparing screenshots for Gemini…");
 
     try {
@@ -393,14 +414,28 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
           enforceSchema,
           titleHint,
           schemaType,
+          promptMode: promptModeState,
+          shots: shots.map(({ id, timecode, label, note }) => ({ id, timecode, label, note })),
+          dspyOptions:
+            promptModeState === "dspy"
+              ? ({
+                  auto: "light",
+                  timeoutMs: 90_000,
+                } satisfies GeneratePayload["dspyOptions"])
+              : undefined,
         } satisfies GeneratePayload),
       });
-      const genJson = (await genRes.json()) as { rawText?: string; error?: string };
+      const genJson = (await genRes.json()) as {
+        rawText?: string;
+        error?: string;
+        promptMeta?: PromptOptimizationMeta;
+      };
       if (!genRes.ok) {
         throw new Error(genJson.error || "Generation failed");
       }
 
       setResultText(genJson.rawText ?? "");
+      setPromptMeta(genJson.promptMeta ?? null);
       showToast("success", "Structured result is ready");
     } catch (error) {
       showToast(
@@ -410,7 +445,16 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     } finally {
       setBusyPhase(null);
     }
-  }, [captureAndUploadScreenshots, enforceSchema, schemaType, showToast, shots.length, titleHint, videoOnGemini]);
+  }, [
+    captureAndUploadScreenshots,
+    enforceSchema,
+    promptModeState,
+    schemaType,
+    shots,
+    showToast,
+    titleHint,
+    videoOnGemini,
+  ]);
 
   const handleRemoveShot = useCallback((id: string) => {
     setShots((prev) => prev.filter((shot) => shot.id !== id));
@@ -528,6 +572,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setSchemaType,
     titleHint,
     setTitleHint,
+    promptMode: promptModeState,
+    setPromptMode,
+    promptMeta,
     showAdvanced,
     setShowAdvanced,
     resultText,

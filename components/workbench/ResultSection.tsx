@@ -3,7 +3,7 @@
 
 import { useCallback } from "react";
 import HowToViewer from "../HowToViewer";
-import { SchemaType } from "@/lib/types";
+import { PromptOptimizationMeta, SchemaType } from "@/lib/types";
 import { Shot } from "@/lib/types";
 import { safeStringify } from "@/lib/json";
 import { markdownToHtml } from "@/lib/markdown";
@@ -36,6 +36,7 @@ type ResultSectionProps = {
   enforceSchema: boolean;
   schemaType: SchemaType;
   shots: Shot[];
+  promptMeta: PromptOptimizationMeta | null;
   onCopy: (type: ToastState["type"], message: string) => void;
   onExportPdf: () => Promise<void>;
   isExporting: boolean;
@@ -48,6 +49,7 @@ export default function ResultSection({
   enforceSchema,
   schemaType,
   shots,
+  promptMeta,
   onCopy,
   onExportPdf,
   isExporting,
@@ -127,6 +129,31 @@ export default function ResultSection({
             <CardDescription className="text-sm text-gray-600">
               Toggle between a formatted view and raw JSON to verify Gemini output.
             </CardDescription>
+            {promptMeta && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                <Badge
+                  variant="outline"
+                  className={`border ${
+                    promptMeta.appliedMode === "dspy"
+                      ? "border-purple-300 text-purple-600"
+                      : "border-gray-300 text-gray-600"
+                  }`}
+                >
+                  {promptMeta.appliedMode === "dspy" ? "DSPy optimized" : "Manual prompt"}
+                </Badge>
+                <span>{promptMeta.message || "Prompt strategy evaluated."}</span>
+                {typeof promptMeta.coverage === "number" && (
+                  <span className="text-[11px] text-gray-400">
+                    Coverage {(promptMeta.coverage * 100).toFixed(0)}%
+                  </span>
+                )}
+                {typeof promptMeta.score === "number" && (
+                  <span className="text-[11px] text-gray-400">
+                    Score {(promptMeta.score * 100).toFixed(0)}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <CardAction>

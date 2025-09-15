@@ -67,6 +67,9 @@ export default function VideoWorkbench() {
     setSchemaType,
     titleHint,
     setTitleHint,
+    promptMode,
+    setPromptMode,
+    promptMeta,
     showAdvanced,
     setShowAdvanced,
     readyToGenerate,
@@ -132,6 +135,9 @@ export default function VideoWorkbench() {
         setEnforceSchema={setEnforceSchema}
         titleHint={titleHint}
         setTitleHint={setTitleHint}
+        promptMode={promptMode}
+        setPromptMode={setPromptMode}
+        promptMeta={promptMeta}
         showAdvanced={showAdvanced}
         setShowAdvanced={setShowAdvanced}
         readyToGenerate={readyToGenerate}
@@ -146,6 +152,7 @@ export default function VideoWorkbench() {
         enforceSchema={enforceSchema}
         schemaType={schemaType}
         shots={shots}
+        promptMeta={promptMeta}
         onCopy={(type, message) => showToast(type, message)}
         onExportPdf={handleExportPdf}
         isExporting={isExporting}
