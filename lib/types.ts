@@ -88,4 +88,40 @@ export type DSPyOptions = {
    * Values must be in (0, 1], last value should typically be 1.0.
    */
   progressiveSchedule?: number[];
+
+  // New fields
+  /**
+   * Stop early when perfect coverage is reached and maintained for a streak.
+   */
+  earlyStopOnPerfect?: boolean;
+  /**
+   * Number of consecutive perfect-coverage iterations to trigger early stop.
+   */
+  earlyStopStreak?: number;
+  /**
+   * Enforce a minimum validation set size (absolute number of examples).
+   */
+  minValidationSize?: number;
+
+  /**
+   * Rate limit (requests per minute) for LM calls.
+   */
+  rpmLimit?: number;
+
+  /**
+   * Enable local parallel evaluation (no extra LM throughput).
+   */
+  parallelEval?: boolean;
+  /**
+   * Number of workers to use for local parallel evaluation.
+   */
+  parallelWorkers?: number;
+  /**
+   * Batch size for local parallel evaluation.
+   */
+  parallelBatchSize?: number;
+  /**
+   * Timeout for local evaluation (ms).
+   */
+  evalTimeoutMs?: number;
 };

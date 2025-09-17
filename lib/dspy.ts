@@ -306,14 +306,19 @@ export async function optimizePromptWithDSPy(
       child.kill("SIGKILL");
     }, timeoutMs);
 
-    let stdout = "";
+    const STDOUT_MAX = Number(process.env.DSPY_STDOUT_BUFFER_MAX ?? 524288); // 512KB default
+    let stdoutBuf = "";
     let stderr = "";
 
     const progressUpdates: DspyProgress[] = [];
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
-      stdout += text;
+      // Append to ring buffer (keep only the last STDOUT_MAX characters)
+      stdoutBuf += text;
+      if (stdoutBuf.length > STDOUT_MAX) {
+        stdoutBuf = stdoutBuf.slice(-STDOUT_MAX);
+      }
       // Try to parse any complete JSON lines in this chunk as progress updates
       const lines = text.split(/\r?\n/);
       for (const raw of lines) {
@@ -365,7 +370,7 @@ export async function optimizePromptWithDSPy(
       clearTimeout(timer);
       if (code !== 0) {
         const stderrMsg = stderr.trim();
-        const stdoutLines = stdout.trim().split(/\r?\n/).filter((line) => line.trim());
+        const stdoutLines = stdoutBuf.trim().split(/\r?\n/).filter((line) => line.trim());
         const stdoutTail = stdoutLines.slice(-5).join("\n"); // Last 5 lines for context
 
         let errorMsg = `DSPy optimizer exited with code ${code}`;
@@ -380,15 +385,15 @@ export async function optimizePromptWithDSPy(
         return;
       }
 
-      const trimmed = stdout.trim();
+      const trimmed = stdoutBuf.trim();
       if (!trimmed) {
         reject(new Error("DSPy optimizer returned an empty response"));
         return;
       }
 
-      // Parse stdout as a sequence of JSON lines. Progress lines have type: "progress".
-      // The final result is the last JSON line without type === "progress".
-      let resultObj: any = null;
+        // Parse stdout as a sequence of JSON lines. Progress lines have type: "progress".
+        // The final result is the last JSON line without type === "progress".
+        let resultObj: unknown = null;
       const lines = trimmed.split(/\r?\n/);
       for (const raw of lines) {
         const line = raw.trim();
@@ -448,7 +453,8 @@ export async function optimizePromptWithDSPy(
         }
       }
 
-      const optimizedPromptObj: OptimizedPrompt | undefined = (resultObj?.optimizedPrompt as OptimizedPrompt) || undefined;
+        const optimizedPromptObj: OptimizedPrompt | undefined =
+          (resultObj as DspyOptimizationResult | null)?.optimizedPrompt;
       const comparison: DspyPromptComparison = buildPromptComparison(payload.basePrompt, optimizedPromptObj);
 
       const finalResult: DspyOptimizationResult = {

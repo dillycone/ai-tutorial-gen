@@ -158,6 +158,9 @@ type DspyOptions = Partial<
     | "parallelWorkers"
     | "parallelBatchSize"
     | "evalTimeoutMs"
+    | "minValidationSize"
+    | "earlyStopOnPerfect"
+    | "earlyStopStreak"
   >
 >;
 
@@ -293,6 +296,9 @@ export async function POST(req: Request) {
           parallelWorkers: dspyOptions.parallelWorkers,
           parallelBatchSize: dspyOptions.parallelBatchSize,
           evalTimeoutMs: dspyOptions.evalTimeoutMs,
+          minValidationSize: dspyOptions.minValidationSize,
+          earlyStopOnPerfect: dspyOptions.earlyStopOnPerfect,
+          earlyStopStreak: dspyOptions.earlyStopStreak,
           auto: (dspyOptions.auto ?? null) as DspyOptimizationPayload["auto"],
           maxMetricCalls: dspyOptions.maxMetricCalls ?? 600,
           seed: dspyOptions.seed,

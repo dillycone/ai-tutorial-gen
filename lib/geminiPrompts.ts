@@ -100,14 +100,6 @@ async function readOverrides(): Promise<PromptOverrides> {
   }
 }
 
-async function writeOverrides(overrides: PromptOverrides): Promise<void> {
-  const directory = dirname(OVERRIDE_PATH);
-  if (directory) {
-    await fs.promises.mkdir(directory, { recursive: true });
-  }
-  await fs.promises.writeFile(OVERRIDE_PATH, JSON.stringify(overrides, null, 2), "utf-8");
-}
-
 const writeLocks = new Map<string, Promise<void>>();
 
 async function writeOverridesAtomic(overrides: PromptOverrides): Promise<void> {
@@ -207,7 +199,7 @@ export async function promoteBaselinePrompt(
     return false;
   }
 
-  const overrides = readOverrides();
+  const overrides = await readOverrides();
   const currentEntry = overrides[type];
   const currentScore =
     currentEntry && typeof currentEntry.score === "number" ? currentEntry.score : 0;

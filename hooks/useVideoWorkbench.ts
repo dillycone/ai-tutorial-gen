@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatFileSize, toTimecode } from "@/lib/format";
-import { PromptMode, PromptOptimizationMeta, SchemaType, Shot } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaType, Shot, DSPyOptions } from "@/lib/types";
 
 export type BusyPhase = "upload" | "generate" | "export";
 
@@ -56,7 +56,7 @@ type GeneratePayload = {
   schemaType?: SchemaType;
   promptMode?: PromptMode;
   shots?: Array<{ id: string; timecode: string; label?: string; note?: string }>;
-  dspyOptions?: {
+  dspyOptions?: DSPyOptions & {
     auto?: "light" | "medium" | "heavy";
     maxMetricCalls?: number;
     model?: string;
@@ -71,15 +71,6 @@ type GeneratePayload = {
     experienceTopK?: number;
     experienceMinScore?: number;
     persistExperience?: boolean;
-    jsonBonus?: number;
-    featureWeights?: Record<string, number>;
-    rpmLimit?: number;
-    alwaysFullValidation?: boolean;
-    progressiveSchedule?: number[];
-    parallelEval?: boolean;
-    parallelWorkers?: number;
-    parallelBatchSize?: number;
-    evalTimeoutMs?: number;
   };
   promoteBaseline?: boolean;
 };

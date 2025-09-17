@@ -126,6 +126,41 @@ def _check_multiprocessing_health() -> bool:
         return False
 
 
+def _safe_pool_close(pool, force_terminate: bool = False) -> None:
+    """Best-effort shutdown of multiprocessing or thread pools.
+
+    If force_terminate is True, attempt terminate() first, then join/close as applicable.
+    Otherwise, close() then join(), and finally ensure terminate() is invoked if available.
+    """
+    if pool is None:
+        return
+    # Try terminate first when forced
+    if force_terminate:
+        try:
+            if hasattr(pool, "terminate"):
+                pool.terminate()
+        except Exception:
+            pass
+    # Try close when not forced
+    if not force_terminate:
+        try:
+            if hasattr(pool, "close"):
+                pool.close()
+        except Exception:
+            pass
+    # Join regardless (best-effort)
+    try:
+        pool.join()
+    except Exception:
+        pass
+    # Final terminate cleanup
+    try:
+        if hasattr(pool, "terminate"):
+            pool.terminate()
+    except Exception:
+        pass
+
+
 def _acquire_file_lock(file_handle):
     """Acquire an exclusive lock on a file handle (Unix only)."""
     try:
@@ -606,18 +641,16 @@ def _default_category_weights(schema_type: str) -> Dict[str, float]:
             "formatWhenNotEnforced": 1.0,
             "noScreenshotsBehavior": 0.5,
         }
-    # tutorial defaults (rebalanced for robustness)
-    # Weights are relative (coverage uses hit_weight / total_weight).
-    # Targets: grounding ~0.30 share, screenshotCitation ~0.25 share when present.
+    # tutorial defaults aligned with UI (lib/featureImportance.ts)
     return {
-        "schemaFocus": 0.15,
-        "grounding": 0.30,
-        "screenshotCitation": 0.25,
-        "timecodeOrdering": 0.20,
-        "titleHint": 0.05,
-        "formatWhenEnforced": 0.10,
-        "formatWhenNotEnforced": 0.10,
-        "noScreenshotsBehavior": 0.10,
+        "schemaFocus": 2.0,
+        "grounding": 2.0,
+        "screenshotCitation": 1.0,
+        "timecodeOrdering": 2.0,
+        "titleHint": 0.5,
+        "formatWhenEnforced": 1.0,
+        "formatWhenNotEnforced": 0.5,
+        "noScreenshotsBehavior": 0.5,
     }
 
 
@@ -831,27 +864,26 @@ def _parallel_evaluate_prompt(
             try:
                 pool = mp_dummy.Pool(processes=max(1, int(workers)))
                 job = pool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
-                results = job.get(timeout=max(1.0, float(timeout_s)))
-                meta["mode"] = "threads"
-                return results, meta
+                try:
+                    results = job.get(timeout=max(1.0, float(timeout_s)))
+                    meta["mode"] = "threads"
+                    return results, meta
+                except mp.TimeoutError as exc:
+                    _safe_pool_close(pool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread pool timeout ({exc})"
+                    return seq_results, seq_meta
+                except Exception as exc:
+                    _safe_pool_close(pool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread pool failed ({exc})"
+                    return seq_results, seq_meta
             finally:
-                if pool is not None:
-                    try:
-                        pool.close()
-                    except Exception:
-                        pass
-                    try:
-                        pool.join(timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        pool.terminate()
-                    except Exception:
-                        pass
+                _safe_pool_close(pool)
         except Exception:
-            # Fall back to sequential if threads fail
+            # Fall back to sequential if threads fail to initialize
             seq_results, seq_meta = _run_sequential()
-            seq_meta["fallback"] = "sequential - thread pool failed"
+            seq_meta["fallback"] = "sequential - thread pool init failed"
             return seq_results, seq_meta
 
     # If multiprocessing is unhealthy, prefer thread pool, else sequential
@@ -862,78 +894,125 @@ def _parallel_evaluate_prompt(
             try:
                 pool = mp_dummy.Pool(processes=max(1, int(workers)))
                 job = pool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
-                results = job.get(timeout=max(1.0, float(timeout_s)))
-                meta["mode"] = "threads"
-                meta["fallback"] = "threads - multiprocessing unavailable"
-                return results, meta
+                try:
+                    results = job.get(timeout=max(1.0, float(timeout_s)))
+                    meta["mode"] = "threads"
+                    meta["fallback"] = "threads - multiprocessing unavailable"
+                    return results, meta
+                except mp.TimeoutError as exc:
+                    _safe_pool_close(pool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread pool timeout ({exc}); multiprocessing unavailable"
+                    return seq_results, seq_meta
+                except Exception as exc:
+                    _safe_pool_close(pool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread pool failed ({exc}); multiprocessing unavailable"
+                    return seq_results, seq_meta
             finally:
-                if pool is not None:
-                    try:
-                        pool.close()
-                    except Exception:
-                        pass
-                    try:
-                        pool.join(timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        pool.terminate()
-                    except Exception:
-                        pass
+                _safe_pool_close(pool)
         except Exception:
             seq_results, seq_meta = _run_sequential()
             seq_meta["fallback"] = "sequential - multiprocessing unavailable"
             return seq_results, seq_meta
 
-    # Try process pool; on failure, fall back to threads, then sequential
+    # Try process pool; on failure or timeout, fall back to threads, then sequential
     try:
         pool = None
         try:
             pool = mp.Pool(processes=max(1, int(workers)))
             job = pool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
-            results = job.get(timeout=max(1.0, float(timeout_s)))
-            meta["mode"] = "processes"
-            return results, meta
+            try:
+                results = job.get(timeout=max(1.0, float(timeout_s)))
+                meta["mode"] = "processes"
+                return results, meta
+            except mp.TimeoutError as exc:
+                _safe_pool_close(pool, force_terminate=True)
+                # Fallback: threads
+                try:
+                    import multiprocessing.dummy as mp_dummy
+                    tpool = None
+                    try:
+                        tpool = mp_dummy.Pool(processes=max(1, int(workers)))
+                        tjob = tpool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
+                        try:
+                            results = tjob.get(timeout=max(1.0, float(timeout_s)))
+                            meta["mode"] = "threads"
+                            meta["fallback"] = f"threads - process pool timeout ({exc})"
+                            return results, meta
+                        except mp.TimeoutError as exc2:
+                            _safe_pool_close(tpool, force_terminate=True)
+                            seq_results, seq_meta = _run_sequential()
+                            seq_meta["fallback"] = f"sequential - both pools timeout (proc: {exc}, thread: {exc2})"
+                            return seq_results, seq_meta
+                        except Exception as exc2:
+                            _safe_pool_close(tpool, force_terminate=True)
+                            seq_results, seq_meta = _run_sequential()
+                            seq_meta["fallback"] = f"sequential - process timeout; thread failed ({exc2})"
+                            return seq_results, seq_meta
+                    finally:
+                        _safe_pool_close(tpool)
+                except Exception:
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = "sequential - process timeout; thread init failed"
+                    return seq_results, seq_meta
+            except Exception as exc:
+                _safe_pool_close(pool, force_terminate=True)
+                # Fallback: threads
+                try:
+                    import multiprocessing.dummy as mp_dummy
+                    tpool = None
+                    try:
+                        tpool = mp_dummy.Pool(processes=max(1, int(workers)))
+                        tjob = tpool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
+                        try:
+                            results = tjob.get(timeout=max(1.0, float(timeout_s)))
+                            meta["mode"] = "threads"
+                            meta["fallback"] = f"threads - process pool failed ({exc})"
+                            return results, meta
+                        except mp.TimeoutError as exc2:
+                            _safe_pool_close(tpool, force_terminate=True)
+                            seq_results, seq_meta = _run_sequential()
+                            seq_meta["fallback"] = f"sequential - thread timeout after process failure ({exc2})"
+                            return seq_results, seq_meta
+                        except Exception as exc2:
+                            _safe_pool_close(tpool, force_terminate=True)
+                            seq_results, seq_meta = _run_sequential()
+                            seq_meta["fallback"] = f"sequential - thread failed after process failure ({exc2})"
+                            return seq_results, seq_meta
+                    finally:
+                        _safe_pool_close(tpool)
+                except Exception:
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = "sequential - process failed; thread init failed"
+                    return seq_results, seq_meta
         finally:
-            if pool is not None:
-                try:
-                    pool.close()
-                except Exception:
-                    pass
-                try:
-                    pool.join(timeout=2.0)
-                except Exception:
-                    pass
-                try:
-                    pool.terminate()
-                except Exception:
-                    pass
+            _safe_pool_close(pool)
     except Exception:
         # Fallback: threads
         try:
             import multiprocessing.dummy as mp_dummy
-            pool = None
+            tpool = None
             try:
-                pool = mp_dummy.Pool(processes=max(1, int(workers)))
-                job = pool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
-                results = job.get(timeout=max(1.0, float(timeout_s)))
-                meta["mode"] = "threads"
-                meta["fallback"] = "threads - process pool failed"
-                return results, meta
+                tpool = mp_dummy.Pool(processes=max(1, int(workers)))
+                tjob = tpool.map_async(_parallel_worker, args_iter, chunksize=max(1, int(batch_size)))
+                try:
+                    results = tjob.get(timeout=max(1.0, float(timeout_s)))
+                    meta["mode"] = "threads"
+                    meta["fallback"] = "threads - process pool init failed"
+                    return results, meta
+                except mp.TimeoutError as exc2:
+                    _safe_pool_close(tpool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread timeout after process init failure ({exc2})"
+                    return seq_results, seq_meta
+                except Exception as exc2:
+                    _safe_pool_close(tpool, force_terminate=True)
+                    seq_results, seq_meta = _run_sequential()
+                    seq_meta["fallback"] = f"sequential - thread failed after process init failure ({exc2})"
+                    return seq_results, seq_meta
             finally:
-                if pool is not None:
-                    try:
-                        pool.close()
-                    except Exception:
-                        pass
-                    try:
-                        pool.join(timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        pool.terminate()
-                    except Exception:
-                        pass
+                _safe_pool_close(tpool)
         except Exception:
             seq_results, seq_meta = _run_sequential()
             seq_meta["fallback"] = "sequential - both pools failed"
@@ -1709,6 +1788,16 @@ def _build_cache_key(payload: Dict[str, Any]) -> str:
         "persistExperience": payload.get("persistExperience"),
         # Include checkpoint path as it can affect outputs if reloaded
         "checkpointPath": payload.get("checkpointPath") or "",
+        # DSPy control fields that affect optimization behavior
+        "alwaysFullValidation": payload.get("alwaysFullValidation"),
+        "progressiveSchedule": payload.get("progressiveSchedule"),
+        "minValidationSize": payload.get("minValidationSize"),
+        "earlyStopOnPerfect": payload.get("earlyStopOnPerfect"),
+        "earlyStopStreak": payload.get("earlyStopStreak"),
+        "parallelEval": payload.get("parallelEval"),
+        "parallelWorkers": payload.get("parallelWorkers"),
+        "parallelBatchSize": payload.get("parallelBatchSize"),
+        "evalTimeoutMs": payload.get("evalTimeoutMs"),
     }
 
     # Canonical JSON

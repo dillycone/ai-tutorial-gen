@@ -79,7 +79,7 @@ export default function ResultSection({
       <AlertDescription className="space-y-2">
         <p className="text-gray-700">No result yet.</p>
         <p className="text-sm text-gray-600">
-          Finish the steps above and select "Generate" to preview Gemini&apos;s structured output here.
+          Finish the steps above and select &quot;Generate&quot; to preview Gemini&apos;s structured output here.
         </p>
       </AlertDescription>
     </Alert>
