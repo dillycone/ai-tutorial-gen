@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# python tooling
+/.python_lib/
+
 # production
 /build
 

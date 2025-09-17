@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatFileSize, toTimecode } from "@/lib/format";
-import { SchemaType, Shot } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaType, Shot, DSPyOptions } from "@/lib/types";
 
 export type BusyPhase = "upload" | "generate" | "export";
 
@@ -54,6 +54,25 @@ type GeneratePayload = {
   enforceSchema: boolean;
   titleHint?: string;
   schemaType?: SchemaType;
+  promptMode?: PromptMode;
+  shots?: Array<{ id: string; timecode: string; label?: string; note?: string }>;
+  dspyOptions?: DSPyOptions & {
+    auto?: "light" | "medium" | "heavy";
+    maxMetricCalls?: number;
+    model?: string;
+    reflectionModel?: string;
+    temperature?: number;
+    reflectionTemperature?: number;
+    initialInstructions?: string;
+    timeoutMs?: number;
+    debug?: boolean;
+    checkpointPath?: string;
+    experiencePath?: string;
+    experienceTopK?: number;
+    experienceMinScore?: number;
+    persistExperience?: boolean;
+  };
+  promoteBaseline?: boolean;
 };
 
 export type UseVideoWorkbenchReturn = {
@@ -79,8 +98,13 @@ export type UseVideoWorkbenchReturn = {
   setSchemaType: (value: SchemaType) => void;
   titleHint: string;
   setTitleHint: (value: string) => void;
+  promptMode: PromptMode;
+  setPromptMode: (mode: PromptMode) => void;
+  promptMeta: PromptOptimizationMeta | null;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
+  promoteBaseline: boolean;
+  setPromoteBaseline: (value: boolean) => void;
   resultText: string | null;
   setResultText: (value: string | null) => void;
   resultTab: "formatted" | "json";
@@ -134,7 +158,70 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const [enforceSchema, setEnforceSchema] = useState(true);
   const [schemaType, setSchemaType] = useState<SchemaType>("tutorial");
   const [titleHint, setTitleHint] = useState("");
+  const [promptModeState, setPromptModeState] = useState<PromptMode>("manual");
+  const [promptMeta, setPromptMeta] = useState<PromptOptimizationMeta | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [promoteBaseline, setPromoteBaseline] = useState(false);
+  const [jsonBonus, setJsonBonus] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("dspy.jsonBonus");
+        const num = raw != null ? Number.parseFloat(raw) : NaN;
+        if (Number.isFinite(num)) return Math.max(0, Math.min(1, num));
+      } catch {
+        // ignore
+      }
+    }
+    return 0.25;
+  });
+  const [featureWeights, setFeatureWeights] = useState<Record<string, number>>({});
+  const [alwaysFullValidation, setAlwaysFullValidation] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("dspy.alwaysFullValidation");
+        return raw === "true";
+      } catch {
+        // ignore
+      }
+    }
+    return false;
+  });
+  const [parallelEvalEnabled, setParallelEvalEnabled] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("dspy.parallel.enabled");
+        if (raw === "true") return true;
+        if (raw === "false") return false;
+      } catch {
+        // ignore
+      }
+    }
+    return false;
+  });
+  const [parallelWorkers, setParallelWorkers] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("dspy.parallel.workers");
+        const num = raw != null ? Number.parseInt(raw, 10) : NaN;
+        if (Number.isFinite(num) && num > 0) return num;
+      } catch {
+        // ignore
+      }
+    }
+    return 4;
+  });
+  const [parallelBatchSize, setParallelBatchSize] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("dspy.parallel.batchSize");
+        const num = raw != null ? Number.parseInt(raw, 10) : NaN;
+        if (Number.isFinite(num) && num > 0) return num;
+      } catch {
+        // ignore
+      }
+    }
+    return 8;
+  });
 
   const [resultText, setResultText] = useState<string | null>(null);
   const [resultTab, setResultTab] = useState<"formatted" | "json">("formatted");
@@ -147,11 +234,164 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setToast({ id: Date.now(), type, message });
   }, []);
 
+  const setPromptMode = useCallback(
+    (mode: PromptMode) => {
+      setPromptModeState(mode);
+      setPromptMeta(null);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!toast) return;
     const timeout = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const ce = event as CustomEvent<any>;
+      const detail = (ce as any).detail;
+      const val =
+        typeof detail === "number"
+          ? detail
+          : typeof detail?.value === "number"
+            ? detail.value
+            : undefined;
+      if (typeof val === "number") {
+        const clamped = Math.max(0, Math.min(1, val));
+        setJsonBonus(clamped);
+        try {
+          window.localStorage.setItem("dspy.jsonBonus", String(clamped));
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener("dspy:jsonBonus", handler as EventListener);
+    return () => window.removeEventListener("dspy:jsonBonus", handler as EventListener);
+  }, []);
+
+  // Feature importance updates from OptionsSection
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const ce = event as CustomEvent<any>;
+      const detail = (ce as any).detail;
+      const obj =
+        detail && typeof detail === "object" && detail.weights && typeof detail.weights === "object"
+          ? detail.weights
+          : typeof detail === "object"
+            ? detail
+            : null;
+      if (obj && typeof obj === "object") {
+        const weights: Record<string, number> = {};
+        for (const [k, v] of Object.entries(obj)) {
+          const num = Number(v);
+          if (Number.isFinite(num)) weights[k] = num;
+        }
+        setFeatureWeights(weights);
+        try {
+          const key = `dspy.featureWeights.${schemaType}`;
+          window.localStorage.setItem(key, JSON.stringify(weights));
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener("dspy:featureWeights", handler as EventListener);
+    return () => window.removeEventListener("dspy:featureWeights", handler as EventListener);
+  }, [schemaType]);
+
+  // Handle always-full-validation toggle from OptionsSection
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const ce = event as CustomEvent<any>;
+      const detail = (ce as any).detail;
+      const val = typeof detail === "boolean" ? detail : typeof detail?.value === "boolean" ? detail.value : undefined;
+      if (typeof val === "boolean") {
+        setAlwaysFullValidation(val);
+        try {
+          window.localStorage.setItem("dspy.alwaysFullValidation", String(val));
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener("dspy:alwaysFullValidation", handler as EventListener);
+    return () => window.removeEventListener("dspy:alwaysFullValidation", handler as EventListener);
+  }, []);
+
+  // Parallel evaluation settings from OptionsSection
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const ce = event as CustomEvent<any>;
+      const detail = (ce as any).detail;
+      if (detail && typeof detail === "object") {
+        const enabled =
+          typeof detail.enabled === "boolean"
+            ? detail.enabled
+            : typeof detail?.value === "boolean"
+              ? detail.value
+              : undefined;
+        const workers =
+          typeof detail.workers === "number"
+            ? detail.workers
+            : typeof detail.workers === "string"
+              ? Number.parseInt(detail.workers, 10)
+              : undefined;
+        const batch =
+          typeof detail.batchSize === "number"
+            ? detail.batchSize
+            : typeof detail.batchSize === "string"
+              ? Number.parseInt(detail.batchSize, 10)
+              : undefined;
+
+        if (typeof enabled === "boolean") {
+          setParallelEvalEnabled(enabled);
+          try {
+            window.localStorage.setItem("dspy.parallel.enabled", String(enabled));
+          } catch {
+            // ignore
+          }
+        }
+        if (Number.isFinite(workers as number) && (workers as number) > 0) {
+          setParallelWorkers(workers as number);
+          try {
+            window.localStorage.setItem("dspy.parallel.workers", String(workers));
+          } catch {
+            // ignore
+          }
+        }
+        if (Number.isFinite(batch as number) && (batch as number) > 0) {
+          setParallelBatchSize(batch as number);
+          try {
+            window.localStorage.setItem("dspy.parallel.batchSize", String(batch));
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+    window.addEventListener("dspy:parallelEval", handler as EventListener);
+    return () => window.removeEventListener("dspy:parallelEval", handler as EventListener);
+  }, []);
+
+  // Load stored feature weights when schema changes
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(`dspy.featureWeights.${schemaType}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, number>;
+        if (parsed && typeof parsed === "object") {
+          setFeatureWeights(parsed);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setFeatureWeights({});
+  }, [schemaType]);
 
   useEffect(() => () => {
     if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
@@ -249,6 +489,18 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     });
   }, [resultText, shots.length, videoOnGemini, videoUrl]);
 
+  const resetSelection = useCallback(() => {
+    setVideoMetadata(null);
+    setVideoOnGemini(null);
+    setShots([]);
+    setResultText(null);
+    setLatestShotId(null);
+    setFlashShotId(null);
+    setResultTab("formatted");
+    setPromptMeta(null);
+    nextShotIdRef.current = 1;
+  }, []);
+
   const handleDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -257,18 +509,11 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       if (file) {
         setVideoFile(file);
         setVideoUrl(URL.createObjectURL(file));
-        setVideoMetadata(null);
-        setVideoOnGemini(null);
-        setShots([]);
-        setResultText(null);
-        setLatestShotId(null);
-        setFlashShotId(null);
-        setResultTab("formatted");
-        nextShotIdRef.current = 1;
+        resetSelection();
         showToast("info", `Ready to work with ${file.name}`);
       }
     },
-    [showToast],
+    [resetSelection, showToast],
   );
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
@@ -278,17 +523,6 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
 
   const handleDragLeave = useCallback(() => {
     setDragActive(false);
-  }, []);
-
-  const resetSelection = useCallback(() => {
-    setVideoMetadata(null);
-    setVideoOnGemini(null);
-    setShots([]);
-    setResultText(null);
-    setLatestShotId(null);
-    setFlashShotId(null);
-    setResultTab("formatted");
-    nextShotIdRef.current = 1;
   }, []);
 
   const handlePickFile = useCallback(
@@ -379,6 +613,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setBusyPhase("generate");
     setResultText(null);
     setResultTab("formatted");
+    setPromptMeta(null);
     showToast("info", "Preparing screenshots for Gemini…");
 
     try {
@@ -393,14 +628,45 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
           enforceSchema,
           titleHint,
           schemaType,
+          promptMode: promptModeState,
+          shots: shots.map(({ id, timecode, label, note }) => ({ id, timecode, label, note })),
+          dspyOptions:
+            promptModeState === "dspy"
+              ? ({
+                  auto: "medium",
+                  maxMetricCalls: 200,
+                  timeoutMs: 300_000,
+                  experienceTopK: 12,
+                  experienceMinScore: 0.8,
+                  persistExperience: true,
+                  model: "gemini/gemini-2.5-flash",
+                  reflectionModel: "gemini/gemini-2.5-flash",
+                  jsonBonus: jsonBonus,
+                  featureWeights: featureWeights,
+                  rpmLimit: 8,
+                  alwaysFullValidation: alwaysFullValidation,
+                  parallelEval: parallelEvalEnabled,
+                  parallelWorkers: parallelWorkers,
+                  parallelBatchSize: parallelBatchSize,
+                  earlyStopOnPerfect: true,
+                  earlyStopStreak: 15,
+                  minValidationSize: 4,
+                } satisfies GeneratePayload["dspyOptions"])
+              : undefined,
+          promoteBaseline: promptModeState === "dspy" ? promoteBaseline : false,
         } satisfies GeneratePayload),
       });
-      const genJson = (await genRes.json()) as { rawText?: string; error?: string };
+      const genJson = (await genRes.json()) as {
+        rawText?: string;
+        error?: string;
+        promptMeta?: PromptOptimizationMeta;
+      };
       if (!genRes.ok) {
         throw new Error(genJson.error || "Generation failed");
       }
 
       setResultText(genJson.rawText ?? "");
+      setPromptMeta(genJson.promptMeta ?? null);
       showToast("success", "Structured result is ready");
     } catch (error) {
       showToast(
@@ -410,7 +676,22 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     } finally {
       setBusyPhase(null);
     }
-  }, [captureAndUploadScreenshots, enforceSchema, schemaType, showToast, shots.length, titleHint, videoOnGemini]);
+  }, [
+    captureAndUploadScreenshots,
+    enforceSchema,
+    promptModeState,
+    schemaType,
+    shots,
+    showToast,
+    titleHint,
+    videoOnGemini,
+    promoteBaseline,
+    featureWeights,
+    alwaysFullValidation,
+    parallelEvalEnabled,
+    parallelWorkers,
+    parallelBatchSize,
+  ]);
 
   const handleRemoveShot = useCallback((id: string) => {
     setShots((prev) => prev.filter((shot) => shot.id !== id));
@@ -528,8 +809,13 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setSchemaType,
     titleHint,
     setTitleHint,
+    promptMode: promptModeState,
+    setPromptMode,
+    promptMeta,
     showAdvanced,
     setShowAdvanced,
+    promoteBaseline,
+    setPromoteBaseline,
     resultText,
     setResultText,
     resultTab,

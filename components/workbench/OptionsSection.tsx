@@ -1,9 +1,10 @@
-// components/workbench/OptionsSection.tsx
 "use client";
+// components/workbench/OptionsSection.tsx
 
 import { BusyPhase } from "@/hooks/useVideoWorkbench";
-import { SchemaType } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
 import Spinner from "./Spinner";
+import clsx from "clsx";
 
 // ShadCN/UI Components
 import {
@@ -28,6 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -54,6 +56,12 @@ import {
   Users,
 } from "lucide-react";
 
+import JSONBonusControl from "./controls/JSONBonusControl";
+import FeatureImportanceControl from "./controls/FeatureImportanceControl";
+import ValidationModeControl from "./controls/ValidationModeControl";
+import ParallelEvalControl from "./controls/ParallelEvalControl";
+import DSPyCacheControl from "./controls/DSPyCacheControl";
+
 type OptionsSectionProps = {
   schemaType: SchemaType;
   setSchemaType: (value: SchemaType) => void;
@@ -61,8 +69,13 @@ type OptionsSectionProps = {
   setEnforceSchema: (value: boolean) => void;
   titleHint: string;
   setTitleHint: (value: string) => void;
+  promptMode: PromptMode;
+  setPromptMode: (value: PromptMode) => void;
+  promptMeta: PromptOptimizationMeta | null;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
+  promoteBaseline: boolean;
+  setPromoteBaseline: (value: boolean) => void;
   readyToGenerate: boolean;
   busyPhase: BusyPhase | null;
   onGenerate: () => Promise<void>;
@@ -75,8 +88,13 @@ export default function OptionsSection({
   setEnforceSchema,
   titleHint,
   setTitleHint,
+  promptMode,
+  setPromptMode,
+  promptMeta,
   showAdvanced,
   setShowAdvanced,
+  promoteBaseline,
+  setPromoteBaseline,
   readyToGenerate,
   busyPhase,
   onGenerate,
@@ -205,6 +223,78 @@ export default function OptionsSection({
             />
           </div>
 
+          <div className="space-y-3">
+            <Label className="text-sm font-medium text-gray-700">Prompt Strategy</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busyPhase === "generate"}
+                onClick={() => setPromptMode("manual")}
+                className={clsx(
+                  "px-4 py-2 text-sm font-medium transition-colors",
+                  promptMode === "manual"
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-600 shadow-sm"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-50",
+                )}
+              >
+                Manual prompt
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busyPhase === "generate"}
+                onClick={() => setPromptMode("dspy")}
+                className={clsx(
+                  "px-4 py-2 text-sm font-medium transition-colors flex items-center gap-2",
+                  promptMode === "dspy"
+                    ? "border-purple-500 bg-purple-50 text-purple-600 shadow-sm"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-50",
+                )}
+              >
+                DSPy GEPA
+                <Badge variant="outline" className="border-purple-200 text-purple-500 text-[10px]">
+                  beta
+                </Badge>
+              </Button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Toggle between handcrafted guidance and DSPy 3 + GEPA optimized instructions.
+            </p>
+            {promptMeta && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                <Badge
+                  variant="outline"
+                  className={`border ${
+                    promptMeta.appliedMode === "dspy"
+                      ? "border-purple-300 text-purple-600"
+                      : "border-gray-300 text-gray-600"
+                  }`}
+                >
+                  {promptMeta.appliedMode === "dspy" ? "DSPy applied" : "Manual prompt"}
+                </Badge>
+                <span className="font-medium text-gray-700">
+                  {promptMeta.message || "Prompt strategy evaluated."}
+                </span>
+                {typeof promptMeta.coverage === "number" && (
+                  <span className="text-[11px] text-gray-500">
+                    Coverage {(promptMeta.coverage * 100).toFixed(0)}%
+                  </span>
+                )}
+                {typeof promptMeta.score === "number" && (
+                  <span className="text-[11px] text-gray-500">
+                    Score {(promptMeta.score * 100).toFixed(0)}%
+                  </span>
+                )}
+                {typeof promptMeta.retrievedFromExperience === "number" && promptMeta.retrievedFromExperience > 0 && (
+                  <span className="text-[11px] text-gray-500">
+                    Memory {promptMeta.retrievedFromExperience}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Advanced Options */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
@@ -220,13 +310,52 @@ export default function OptionsSection({
                 Advanced Options
               </Button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="mt-3">
+            <CollapsibleContent className="mt-3 space-y-4">
               <Alert className="border-gray-200 bg-gray-50">
                 <Info className="size-4" />
                 <AlertDescription className="text-gray-600">
                   More controls coming soon — language preferences, transcript syncing, and export formats.
                 </AlertDescription>
               </Alert>
+
+              {/* JSON Bonus (DSPy) */}
+              <JSONBonusControl enabled={promptMode === "dspy"} />
+
+              {/* Feature Importance (DSPy) */}
+              <FeatureImportanceControl enabled={promptMode === "dspy"} schemaType={schemaType} />
+
+              {/* Validation Mode (DSPy) */}
+              <ValidationModeControl enabled={promptMode === "dspy"} />
+
+              {/* Parallel Evaluation (DSPy) */}
+              <ParallelEvalControl enabled={promptMode === "dspy"} />
+
+              {/* DSPy Cache Controls */}
+              <DSPyCacheControl schemaType={schemaType} promptMeta={promptMeta} />
+
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white/80 p-4 shadow-sm">
+                <div className="space-y-1 pr-4">
+                  <p className="text-sm font-medium text-gray-800">Promote DSPy prompt to baseline defaults</p>
+                  <p className="text-xs text-gray-500">
+                    When enabled, any parsed DSPy run that beats the stored score will overwrite the default prompt for this
+                    schema. Handy for letting strong runs become the new baseline.
+                  </p>
+                  {promptMode !== "dspy" ? (
+                    <p className="text-xs text-gray-400">Switch to DSPy mode to activate this setting.</p>
+                  ) : null}
+                  {promptMeta?.baselinePromoted ? (
+                    <Badge variant="outline" className="mt-1 border-emerald-300 bg-emerald-50 text-emerald-600">
+                      Baseline updated this run
+                    </Badge>
+                  ) : null}
+                </div>
+                <Switch
+                  checked={promoteBaseline}
+                  onCheckedChange={(checked) => setPromoteBaseline(Boolean(checked))}
+                  aria-label="Toggle prompt baseline promotion"
+                  disabled={promptMode !== "dspy"}
+                />
+              </div>
             </CollapsibleContent>
           </Collapsible>
         </CardContent>

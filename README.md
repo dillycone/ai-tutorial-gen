@@ -20,6 +20,18 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## DSPy prompt optimization
+
+The workbench now supports optimizing Gemini prompts with **DSPy 3 + GEPA** in addition to the original handwritten prompt.
+
+1. Install the Python tooling once per environment:
+   ```bash
+   pip install -r python/requirements.txt
+   ```
+2. Provide a `GEMINI_API_KEY` so both Next.js and DSPy can reach Gemini models.
+3. In the **Options** panel use the new *Prompt Strategy* toggle to switch between manual prompts and DSPy GEPA optimization.
+4. Generation results will surface which strategy ran along with GEPA coverage/score stats.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
