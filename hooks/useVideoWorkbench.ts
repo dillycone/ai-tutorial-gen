@@ -227,8 +227,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const [resultTab, setResultTab] = useState<"formatted" | "json">("formatted");
   const [previewShotId, setPreviewShotId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [videoLoaded, setVideoLoaded] = useState(false);
 
-  const canCapture = Boolean(videoUrl);
+  const canCapture = Boolean(videoUrl) && videoLoaded;
 
   const showToast = useCallback((type: ToastState["type"], message: string) => {
     setToast({ id: Date.now(), type, message });
@@ -398,12 +399,19 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   }, []);
 
   useEffect(() => {
-    if (!videoUrl) return;
+    if (!videoUrl) {
+      setVideoLoaded(false);
+      return;
+    }
+
     const previousUrl = previousUrlRef.current;
     if (previousUrl && previousUrl !== videoUrl) {
       URL.revokeObjectURL(previousUrl);
     }
     previousUrlRef.current = videoUrl;
+
+    // Reset video loaded state when video URL changes
+    setVideoLoaded(false);
 
     return () => {
       if (previousUrlRef.current) {
@@ -453,7 +461,20 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.key === "c" || event.key === "C") && canCapture && !busy) {
+      // Check if the active element is an input field to avoid interference
+      const activeElement = document.activeElement as HTMLElement;
+      const isInputFocused = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.contentEditable === 'true'
+      );
+
+      if (
+        (event.key === "c" || event.key === "C") &&
+        !isInputFocused &&
+        canCapture &&
+        !busy
+      ) {
         event.preventDefault();
         handleCaptureShot();
       }
@@ -722,6 +743,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       width: video.videoWidth,
       height: video.videoHeight,
     });
+    setVideoLoaded(true);
   }, []);
 
   const handleTimeUpdate = useCallback(() => {
