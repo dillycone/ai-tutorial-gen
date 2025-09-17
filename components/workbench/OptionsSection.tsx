@@ -1,5 +1,5 @@
-// components/workbench/OptionsSection.tsx
 "use client";
+// components/workbench/OptionsSection.tsx
 
 import { BusyPhase } from "@/hooks/useVideoWorkbench";
 import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
@@ -29,6 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -55,6 +56,12 @@ import {
   Users,
 } from "lucide-react";
 
+import JSONBonusControl from "./controls/JSONBonusControl";
+import FeatureImportanceControl from "./controls/FeatureImportanceControl";
+import ValidationModeControl from "./controls/ValidationModeControl";
+import ParallelEvalControl from "./controls/ParallelEvalControl";
+import DSPyCacheControl from "./controls/DSPyCacheControl";
+
 type OptionsSectionProps = {
   schemaType: SchemaType;
   setSchemaType: (value: SchemaType) => void;
@@ -67,6 +74,8 @@ type OptionsSectionProps = {
   promptMeta: PromptOptimizationMeta | null;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
+  promoteBaseline: boolean;
+  setPromoteBaseline: (value: boolean) => void;
   readyToGenerate: boolean;
   busyPhase: BusyPhase | null;
   onGenerate: () => Promise<void>;
@@ -84,6 +93,8 @@ export default function OptionsSection({
   promptMeta,
   showAdvanced,
   setShowAdvanced,
+  promoteBaseline,
+  setPromoteBaseline,
   readyToGenerate,
   busyPhase,
   onGenerate,
@@ -275,6 +286,11 @@ export default function OptionsSection({
                     Score {(promptMeta.score * 100).toFixed(0)}%
                   </span>
                 )}
+                {typeof promptMeta.retrievedFromExperience === "number" && promptMeta.retrievedFromExperience > 0 && (
+                  <span className="text-[11px] text-gray-500">
+                    Memory {promptMeta.retrievedFromExperience}
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -294,13 +310,52 @@ export default function OptionsSection({
                 Advanced Options
               </Button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="mt-3">
+            <CollapsibleContent className="mt-3 space-y-4">
               <Alert className="border-gray-200 bg-gray-50">
                 <Info className="size-4" />
                 <AlertDescription className="text-gray-600">
                   More controls coming soon — language preferences, transcript syncing, and export formats.
                 </AlertDescription>
               </Alert>
+
+              {/* JSON Bonus (DSPy) */}
+              <JSONBonusControl enabled={promptMode === "dspy"} />
+
+              {/* Feature Importance (DSPy) */}
+              <FeatureImportanceControl enabled={promptMode === "dspy"} schemaType={schemaType} />
+
+              {/* Validation Mode (DSPy) */}
+              <ValidationModeControl enabled={promptMode === "dspy"} />
+
+              {/* Parallel Evaluation (DSPy) */}
+              <ParallelEvalControl enabled={promptMode === "dspy"} />
+
+              {/* DSPy Cache Controls */}
+              <DSPyCacheControl schemaType={schemaType} promptMeta={promptMeta} />
+
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white/80 p-4 shadow-sm">
+                <div className="space-y-1 pr-4">
+                  <p className="text-sm font-medium text-gray-800">Promote DSPy prompt to baseline defaults</p>
+                  <p className="text-xs text-gray-500">
+                    When enabled, any parsed DSPy run that beats the stored score will overwrite the default prompt for this
+                    schema. Handy for letting strong runs become the new baseline.
+                  </p>
+                  {promptMode !== "dspy" ? (
+                    <p className="text-xs text-gray-400">Switch to DSPy mode to activate this setting.</p>
+                  ) : null}
+                  {promptMeta?.baselinePromoted ? (
+                    <Badge variant="outline" className="mt-1 border-emerald-300 bg-emerald-50 text-emerald-600">
+                      Baseline updated this run
+                    </Badge>
+                  ) : null}
+                </div>
+                <Switch
+                  checked={promoteBaseline}
+                  onCheckedChange={(checked) => setPromoteBaseline(Boolean(checked))}
+                  aria-label="Toggle prompt baseline promotion"
+                  disabled={promptMode !== "dspy"}
+                />
+              </div>
             </CollapsibleContent>
           </Collapsible>
         </CardContent>

@@ -72,6 +72,8 @@ export default function VideoWorkbench() {
     promptMeta,
     showAdvanced,
     setShowAdvanced,
+    promoteBaseline,
+    setPromoteBaseline,
     readyToGenerate,
     handleGenerate,
     resultText,
@@ -140,6 +142,8 @@ export default function VideoWorkbench() {
         promptMeta={promptMeta}
         showAdvanced={showAdvanced}
         setShowAdvanced={setShowAdvanced}
+        promoteBaseline={promoteBaseline}
+        setPromoteBaseline={setPromoteBaseline}
         readyToGenerate={readyToGenerate}
         busyPhase={busyPhase}
         onGenerate={handleGenerate}
