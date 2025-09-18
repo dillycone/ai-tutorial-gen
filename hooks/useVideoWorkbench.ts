@@ -161,7 +161,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const [promptModeState, setPromptModeState] = useState<PromptMode>("manual");
   const [promptMeta, setPromptMeta] = useState<PromptOptimizationMeta | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [promoteBaseline, setPromoteBaseline] = useState(false);
+  const [promoteBaseline, setPromoteBaseline] = useState(true);
   const [jsonBonus, setJsonBonus] = useState<number>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -453,7 +453,16 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.key === "c" || event.key === "C") && canCapture && !busy) {
+      // Only handle the shortcut if we're not typing in an input field
+      const target = event.target as HTMLElement;
+      const isInputField = target && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.contentEditable === "true" ||
+        target.isContentEditable
+      );
+
+      if ((event.key === "c" || event.key === "C") && canCapture && !busy && !isInputField) {
         event.preventDefault();
         handleCaptureShot();
       }
