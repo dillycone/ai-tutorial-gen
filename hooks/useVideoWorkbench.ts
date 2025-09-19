@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatFileSize, toTimecode } from "@/lib/format";
 import { PromptMode, PromptOptimizationMeta, SchemaType, Shot, DSPyOptions } from "@/lib/types";
+import type { ExportRequestBody } from "@/lib/types/api";
 
 export type BusyPhase = "upload" | "generate" | "export";
 
@@ -32,6 +33,23 @@ export type WorkbenchStep = {
   title: string;
   description: string;
   status: StepStatus;
+};
+
+export type ExportOptionsState = {
+  // Document options
+  includeAppendix: boolean;
+  includeTOC: boolean;
+  includeCover: boolean; // reserved for phase 2 UI
+  linkifyUrls: boolean;
+  runningTitle?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string[];
+
+  // Image options
+  compressImages: boolean;
+  imageQuality: number;   // 0..1
+  imageMaxWidth: number;  // pixels
 };
 
 type UploadResponse = {
@@ -105,6 +123,8 @@ export type UseVideoWorkbenchReturn = {
   setShowAdvanced: (value: boolean) => void;
   promoteBaseline: boolean;
   setPromoteBaseline: (value: boolean) => void;
+  exportOptions: ExportOptionsState;
+  setExportOptions: (next: ExportOptionsState) => void;
   resultText: string | null;
   setResultText: (value: string | null) => void;
   resultTab: "formatted" | "json";
@@ -221,6 +241,20 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       }
     }
     return 8;
+  });
+
+  const [exportOptions, setExportOptions] = useState<ExportOptionsState>({
+    includeAppendix: true,
+    includeTOC: true,
+    includeCover: false,
+    linkifyUrls: true,
+    runningTitle: undefined,
+    author: undefined,
+    subject: undefined,
+    keywords: [],
+    compressImages: true,
+    imageQuality: 0.82,
+    imageMaxWidth: 1280,
   });
 
   const [resultText, setResultText] = useState<string | null>(null);
@@ -749,21 +783,48 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     showToast("info", "Rendering PDF…");
 
     try {
+      const body: ExportRequestBody = {
+        schemaType,
+        enforceSchema,
+        resultText,
+        shots: shots.map(({ id, label, note, timecode, dataUrl }) => ({
+          id,
+          label,
+          note,
+          timecode,
+          dataUrl,
+        })),
+        options: {
+          document: {
+            includeAppendix: exportOptions.includeAppendix,
+            includeTOC: exportOptions.includeTOC,
+            includeCover: exportOptions.includeCover,
+            runningTitle: exportOptions.runningTitle && exportOptions.runningTitle.trim()
+              ? exportOptions.runningTitle.trim()
+              : undefined,
+            author: exportOptions.author && exportOptions.author.trim() ? exportOptions.author.trim() : undefined,
+            subject: exportOptions.subject && exportOptions.subject.trim() ? exportOptions.subject.trim() : undefined,
+            keywords:
+              Array.isArray(exportOptions.keywords) && exportOptions.keywords.length > 0
+                ? exportOptions.keywords.filter((k) => typeof k === "string" && k.trim().length > 0)
+                : undefined,
+            linkifyUrls: exportOptions.linkifyUrls,
+          },
+          image: exportOptions.compressImages
+            ? {
+                format: "jpeg",
+                quality: Math.max(0, Math.min(1, exportOptions.imageQuality)),
+                maxWidth: Math.max(1, Math.floor(exportOptions.imageMaxWidth)),
+                progressive: true,
+              }
+            : undefined,
+        },
+      };
+
       const res = await fetch("/api/gemini/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schemaType,
-          enforceSchema,
-          resultText,
-          shots: shots.map(({ id, label, note, timecode, dataUrl }) => ({
-            id,
-            label,
-            note,
-            timecode,
-            dataUrl,
-          })),
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -771,11 +832,38 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
         throw new Error(error.error || "Export failed");
       }
 
+      // Surface non-fatal export warnings (e.g., missing assets)
+      const warningsHeader = res.headers.get("X-Export-Warnings");
+      if (warningsHeader) {
+        try {
+          const warnings = JSON.parse(decodeURIComponent(warningsHeader)) as string[];
+          if (Array.isArray(warnings) && warnings.length > 0) {
+            const summary = warnings.slice(0, 2).join(" • ");
+            const extra =
+              warnings.length > 2 ? ` +${warnings.length - 2} more` : "";
+            showToast("info", `Exported with warnings: ${summary}${extra}`);
+          }
+        } catch {
+          // ignore header parse errors
+        }
+      }
+
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = schemaType === "tutorial" ? "tutorial-guide.pdf" : "meeting-summary.pdf";
+
+      // Prefer filename from Content-Disposition when available
+      const cd = res.headers.get("Content-Disposition");
+      let filename = schemaType === "tutorial" ? "tutorial-guide.pdf" : "meeting-summary.pdf";
+      if (cd) {
+        const m = /filename="?([^"]+)"?/i.exec(cd);
+        if (m && typeof m[1] === "string") {
+          filename = m[1];
+        }
+      }
+      anchor.download = filename;
+
       document.body.appendChild(anchor);
       anchor.click();
       document.body.removeChild(anchor);
@@ -786,7 +874,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     } finally {
       setBusyPhase(null);
     }
-  }, [enforceSchema, resultText, schemaType, shots, showToast]);
+  }, [enforceSchema, resultText, schemaType, shots, showToast, exportOptions]);
 
   const readyToGenerate = Boolean(videoOnGemini) && shots.length > 0 && !busy;
 
@@ -825,6 +913,8 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setShowAdvanced,
     promoteBaseline,
     setPromoteBaseline,
+    exportOptions,
+    setExportOptions,
     resultText,
     setResultText,
     resultTab,

@@ -1,7 +1,7 @@
 // components/VideoWorkbench.tsx
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import WorkbenchToast from "./workbench/Toast";
 import WorkflowSteps from "./workbench/WorkflowSteps";
@@ -21,6 +21,13 @@ const ResultSection = dynamic(
         <div className="mt-6 h-40 animate-pulse rounded-xl border border-gray-200 bg-gray-50" />
       </section>
     ),
+  },
+);
+
+const ExportSettingsDialog = dynamic(
+  () => import("./workbench/ExportSettingsDialog"),
+  {
+    ssr: false,
   },
 );
 
@@ -76,6 +83,8 @@ export default function VideoWorkbench() {
     setShowAdvanced,
     promoteBaseline,
     setPromoteBaseline,
+    exportOptions,
+    setExportOptions,
     readyToGenerate,
     handleGenerate,
     resultText,
@@ -96,6 +105,10 @@ export default function VideoWorkbench() {
     (type: ToastState["type"], message: string) => showToast(type, message),
     [showToast]
   );
+
+  const [showExportSettings, setShowExportSettings] = useState(false);
+  const handleOpenExportSettings = useCallback(() => setShowExportSettings(true), []);
+  const handleCloseExportSettings = useCallback(() => setShowExportSettings(false), []);
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -169,9 +182,18 @@ export default function VideoWorkbench() {
         onCopy={handleCopyToast}
         onExportPdf={handleExportPdf}
         isExporting={isExporting}
+        onOpenExportSettings={handleOpenExportSettings}
       />
 
       <PreviewModal previewShot={previewShot} onClose={handleClosePreview} />
+
+      {/* REPOMARK:SCOPE: 5 - Render the Export Settings dialog, controlled by local state */}
+      <ExportSettingsDialog
+        open={showExportSettings}
+        options={exportOptions}
+        onChange={setExportOptions}
+        onClose={handleCloseExportSettings}
+      />
     </div>
   );
 }

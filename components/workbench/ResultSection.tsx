@@ -26,7 +26,8 @@ import {
   Code,
   Eye,
   AlertCircle,
-  Loader2
+  Loader2,
+  Settings
 } from "lucide-react";
 
 // Safer JSON formatting helper that avoids double-quoting strings
@@ -49,6 +50,7 @@ type ResultSectionProps = {
   onCopy: (type: ToastState["type"], message: string) => void;
   onExportPdf: () => Promise<void>;
   isExporting: boolean;
+  onOpenExportSettings?: () => void;
 };
 
 export default function ResultSection({
@@ -62,6 +64,7 @@ export default function ResultSection({
   onCopy,
   onExportPdf,
   isExporting,
+  onOpenExportSettings = () => {},
 }: ResultSectionProps) {
   const handleCopy = useCallback(() => {
     if (!resultText) return;
@@ -262,6 +265,23 @@ export default function ResultSection({
                     </TooltipTrigger>
                     <TooltipContent>
                       <p>Copy content to clipboard</p>
+                    </TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onOpenExportSettings}
+                        className="border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50"
+                      >
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Configure export settings</p>
                     </TooltipContent>
                   </Tooltip>
 

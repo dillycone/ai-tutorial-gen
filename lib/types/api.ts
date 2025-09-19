@@ -56,11 +56,47 @@ export type ExportShotIn = {
   dataUrl: string;
 };
 
+/**
+ * Options to control server-side image processing for screenshots embedded in PDF.
+ * When omitted, sensible defaults will be applied by the validator/service.
+ */
+export type ExportImageOptions = {
+  format?: "jpeg" | "png";
+  quality?: number; // 0..1
+  maxWidth?: number;
+  maxHeight?: number;
+  progressive?: boolean;
+};
+
+/**
+ * Options to control document-level formatting, metadata, and behavior.
+ * Many of these are reserved for Phase 2 features but typed now for forward-compatibility.
+ */
+export type ExportDocumentOptions = {
+  includeAppendix?: boolean; // default true
+  includeTOC?: boolean;      // default true (Phase 2)
+  includeCover?: boolean;    // default false (Phase 2)
+  runningTitle?: string;
+  author?: string;           // Phase 2
+  subject?: string;          // Phase 2
+  keywords?: string[];       // Phase 2
+  linkifyUrls?: boolean;     // default true (Phase 2)
+  language?: string;         // e.g., "en" (Phase 2)
+  headingStartOnNewPage?: boolean; // default false (Phase 2)
+  pageNumberOffset?: number; // default 0 (Phase 2)
+};
+
+export type ExportOptions = {
+  document?: ExportDocumentOptions;
+  image?: ExportImageOptions;
+};
+
 export type ExportRequestBody = {
   schemaType: SchemaType;
   enforceSchema: boolean;
   resultText: string;
   shots: ExportShotIn[];
+  options?: ExportOptions;
 };
 
 export type UploadImagesRequestBody = {
