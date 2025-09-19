@@ -1,6 +1,7 @@
 // components/workbench/WorkflowSteps.tsx
 "use client";
 
+import React, { memo } from "react";
 import { WorkbenchStep } from "@/hooks/useVideoWorkbench";
 import { classNames } from "@/lib/ui";
 
@@ -8,7 +9,7 @@ type WorkflowStepsProps = {
   steps: WorkbenchStep[];
 };
 
-export default function WorkflowSteps({ steps }: WorkflowStepsProps) {
+function WorkflowStepsComponent({ steps }: WorkflowStepsProps) {
   return (
     <nav className="animate-fade-in-down flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-inner shadow-gray-200/30 transition-all duration-300 hover:translate-y-[-1px] hover:shadow-lg sm:flex-row sm:items-center sm:justify-between">
       <div className="text-sm font-medium uppercase tracking-wider text-gray-600">Workflow overview</div>
@@ -36,3 +37,23 @@ export default function WorkflowSteps({ steps }: WorkflowStepsProps) {
     </nav>
   );
 }
+
+function areEqual(prev: WorkflowStepsProps, next: WorkflowStepsProps) {
+  if (prev.steps === next.steps) return true;
+  if (prev.steps.length !== next.steps.length) return false;
+  for (let i = 0; i < prev.steps.length; i++) {
+    const a = prev.steps[i];
+    const b = next.steps[i];
+    if (
+      a.id !== b.id ||
+      a.title !== b.title ||
+      a.description !== b.description ||
+      a.status !== b.status
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export default memo(WorkflowStepsComponent, areEqual);

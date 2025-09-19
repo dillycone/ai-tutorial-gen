@@ -1,6 +1,7 @@
 // components/VideoWorkbench.tsx
 "use client";
 
+import { useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import WorkbenchToast from "./workbench/Toast";
 import WorkflowSteps from "./workbench/WorkflowSteps";
@@ -8,6 +9,7 @@ import UploadSection from "./workbench/UploadSection";
 import ScreenshotSection from "./workbench/ScreenshotSection";
 import OptionsSection from "./workbench/OptionsSection";
 import { useVideoWorkbench } from "@/hooks/useVideoWorkbench";
+import type { ToastState } from "@/hooks/useVideoWorkbench";
 
 const ResultSection = dynamic(
   () => import("./workbench/ResultSection"),
@@ -86,7 +88,14 @@ export default function VideoWorkbench() {
     handleExportPdf,
   } = useVideoWorkbench();
 
-  const isExporting = busyPhase === "export";
+  const isExporting = useMemo(() => busyPhase === "export", [busyPhase]);
+
+  const handlePreview = useCallback((id: string) => setPreviewShotId(id), [setPreviewShotId]);
+  const handleClosePreview = useCallback(() => setPreviewShotId(null), [setPreviewShotId]);
+  const handleCopyToast = useCallback(
+    (type: ToastState["type"], message: string) => showToast(type, message),
+    [showToast]
+  );
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -124,7 +133,7 @@ export default function VideoWorkbench() {
         shots={shots}
         latestShotId={latestShotId}
         flashShotId={flashShotId}
-        onPreview={(id) => setPreviewShotId(id)}
+        onPreview={handlePreview}
         onRemove={handleRemoveShot}
         onMove={handleMoveShot}
         onUpdate={handleUpdateShot}
@@ -157,12 +166,12 @@ export default function VideoWorkbench() {
         schemaType={schemaType}
         shots={shots}
         promptMeta={promptMeta}
-        onCopy={(type, message) => showToast(type, message)}
+        onCopy={handleCopyToast}
         onExportPdf={handleExportPdf}
         isExporting={isExporting}
       />
 
-      <PreviewModal previewShot={previewShot} onClose={() => setPreviewShotId(null)} />
+      <PreviewModal previewShot={previewShot} onClose={handleClosePreview} />
     </div>
   );
 }

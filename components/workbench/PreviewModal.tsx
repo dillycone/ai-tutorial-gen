@@ -1,6 +1,7 @@
 // components/workbench/PreviewModal.tsx
 "use client";
 
+import React, { memo } from "react";
 import Image from "next/image";
 import { Shot } from "@/lib/types";
 
@@ -9,7 +10,7 @@ type PreviewModalProps = {
   onClose: () => void;
 };
 
-export default function PreviewModal({ previewShot, onClose }: PreviewModalProps) {
+function PreviewModal({ previewShot, onClose }: PreviewModalProps) {
   if (!previewShot) return null;
 
   return (
@@ -39,3 +40,23 @@ export default function PreviewModal({ previewShot, onClose }: PreviewModalProps
     </div>
   );
 }
+
+function areEqual(prev: PreviewModalProps, next: PreviewModalProps) {
+  const a = prev.previewShot;
+  const b = next.previewShot;
+  if (a === b) {
+    return prev.onClose === next.onClose;
+  }
+  if (!a || !b) return false;
+  return (
+    a.id === b.id &&
+    a.timecode === b.timecode &&
+    a.timeSec === b.timeSec &&
+    a.label === b.label &&
+    a.note === b.note &&
+    a.dataUrl === b.dataUrl &&
+    prev.onClose === next.onClose
+  );
+}
+
+export default memo(PreviewModal, areEqual);

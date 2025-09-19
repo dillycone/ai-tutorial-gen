@@ -1,6 +1,7 @@
 // components/workbench/Toast.tsx
 "use client";
 
+import React, { memo } from "react";
 import { ToastState } from "@/hooks/useVideoWorkbench";
 import { classNames } from "@/lib/ui";
 
@@ -8,7 +9,7 @@ type ToastProps = {
   toast: ToastState | null;
 };
 
-export default function WorkbenchToast({ toast }: ToastProps) {
+function WorkbenchToast({ toast }: ToastProps) {
   if (!toast) return null;
 
   return (
@@ -26,3 +27,15 @@ export default function WorkbenchToast({ toast }: ToastProps) {
     </div>
   );
 }
+
+function areEqual(prev: ToastProps, next: ToastProps) {
+  if (prev.toast === next.toast) return true;
+  if (!prev.toast || !next.toast) return false;
+  return (
+    prev.toast.id === next.toast.id &&
+    prev.toast.type === next.toast.type &&
+    prev.toast.message === next.toast.message
+  );
+}
+
+export default memo(WorkbenchToast, areEqual);

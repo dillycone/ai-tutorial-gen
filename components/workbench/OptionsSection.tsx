@@ -1,10 +1,10 @@
-"use client";
 // components/workbench/OptionsSection.tsx
+"use client";
 
 import { BusyPhase } from "@/hooks/useVideoWorkbench";
 import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
 import Spinner from "./Spinner";
-import clsx from "clsx";
+import { useMemo } from "react";
 
 // ShadCN/UI Components
 import {
@@ -16,51 +16,30 @@ import {
   CardFooter,
   CardAction,
 } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 
 // Icons
 import {
   Settings,
-  ChevronDown,
-  ChevronUp,
-  Info,
-  Zap,
   ExternalLink,
   Loader2,
   Shield,
-  BookOpen,
-  Users,
+  Zap,
 } from "lucide-react";
 
-import JSONBonusControl from "./controls/JSONBonusControl";
-import FeatureImportanceControl from "./controls/FeatureImportanceControl";
-import ValidationModeControl from "./controls/ValidationModeControl";
-import ParallelEvalControl from "./controls/ParallelEvalControl";
-import DSPyCacheControl from "./controls/DSPyCacheControl";
+// Extracted subcomponents
+import SchemaConfig from "@/components/workbench/options/SchemaConfig";
+import PromptStrategy from "@/components/workbench/options/PromptStrategy";
+import AdvancedOptionsPanel from "@/components/workbench/options/AdvancedOptionsPanel";
+import TextField from "@/components/workbench/form/TextField";
 
 type OptionsSectionProps = {
   schemaType: SchemaType;
@@ -100,6 +79,13 @@ export default function OptionsSection({
   onGenerate,
 }: OptionsSectionProps) {
   const schemaDocs = "https://ai.google.dev/gemini-api/docs";
+  const titlePlaceholder = useMemo(
+    () =>
+      schemaType === "tutorial"
+        ? "Optional hint (e.g., How to set up product launch workspace)"
+        : "Optional meeting title hint (e.g., Q3 OKR Planning)",
+    [schemaType]
+  );
 
   return (
     <TooltipProvider>
@@ -147,217 +133,40 @@ export default function OptionsSection({
 
         <CardContent className="space-y-6">
           {/* Schema Configuration */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="schema-select" className="text-sm font-medium text-gray-700">
-                Schema Type
-              </Label>
-              <Select
-                value={schemaType}
-                onValueChange={(value) => setSchemaType(value as SchemaType)}
-              >
-                <SelectTrigger
-                  id="schema-select"
-                  className="bg-white border-gray-300 text-gray-900 hover:bg-gray-50 focus:border-sky-500 focus:ring-sky-500/50"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-white border-gray-200">
-                  <SelectItem value="tutorial" className="text-gray-900 hover:bg-gray-100">
-                    <div className="flex items-center gap-2">
-                      <BookOpen className="size-4 text-blue-400" />
-                      Tutorial
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="meetingSummary" className="text-gray-900 hover:bg-gray-100">
-                    <div className="flex items-center gap-2">
-                      <Users className="size-4 text-green-400" />
-                      Meeting Summary
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex items-center space-x-3 mt-8">
-              <Checkbox
-                id="enforce-schema"
-                checked={enforceSchema}
-                onCheckedChange={(checked) => setEnforceSchema(checked as boolean)}
-                className="border-gray-300 data-[state=checked]:bg-sky-500 data-[state=checked]:border-sky-500"
-              />
-              <div className="flex items-center gap-2">
-                <Label htmlFor="enforce-schema" className="text-sm text-gray-700 font-medium">
-                  Enforce JSON schema
-                </Label>
-                <Badge variant="secondary" className="bg-sky-500/20 text-sky-300 text-xs">
-                  Recommended
-                </Badge>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="size-4 text-gray-500 hover:text-gray-700 cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Ensures consistent output format and structure</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
-          </div>
+          <SchemaConfig
+            schemaType={schemaType}
+            setSchemaType={setSchemaType}
+            enforceSchema={enforceSchema}
+            setEnforceSchema={setEnforceSchema}
+          />
 
           {/* Title Hint Input */}
-          <div className="space-y-2">
-            <Label htmlFor="title-hint" className="text-sm font-medium text-gray-700">
-              Title Hint
-            </Label>
-            <Input
-              id="title-hint"
-              value={titleHint}
-              onChange={(event) => setTitleHint(event.target.value)}
-              placeholder={
-                schemaType === "tutorial"
-                  ? "Optional hint (e.g., How to set up product launch workspace)"
-                  : "Optional meeting title hint (e.g., Q3 OKR Planning)"
-              }
-              className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 hover:bg-gray-50 focus:border-sky-500 focus:ring-sky-500/50"
-            />
-          </div>
+          <TextField
+            id="title-hint"
+            label="Title Hint"
+            value={titleHint}
+            onChange={setTitleHint}
+            placeholder={titlePlaceholder}
+          />
 
-          <div className="space-y-3">
-            <Label className="text-sm font-medium text-gray-700">Prompt Strategy</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busyPhase === "generate"}
-                onClick={() => setPromptMode("manual")}
-                className={clsx(
-                  "px-4 py-2 text-sm font-medium transition-colors",
-                  promptMode === "manual"
-                    ? "border-indigo-500 bg-indigo-50 text-indigo-600 shadow-sm"
-                    : "border-gray-300 text-gray-700 hover:bg-gray-50",
-                )}
-              >
-                Manual prompt
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busyPhase === "generate"}
-                onClick={() => setPromptMode("dspy")}
-                className={clsx(
-                  "px-4 py-2 text-sm font-medium transition-colors flex items-center gap-2",
-                  promptMode === "dspy"
-                    ? "border-purple-500 bg-purple-50 text-purple-600 shadow-sm"
-                    : "border-gray-300 text-gray-700 hover:bg-gray-50",
-                )}
-              >
-                DSPy GEPA
-                <Badge variant="outline" className="border-purple-200 text-purple-500 text-[10px]">
-                  beta
-                </Badge>
-              </Button>
-            </div>
-            <p className="text-xs text-gray-500">
-              Toggle between handcrafted guidance and DSPy 3 + GEPA optimized instructions.
-            </p>
-            {promptMeta && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                <Badge
-                  variant="outline"
-                  className={`border ${
-                    promptMeta.appliedMode === "dspy"
-                      ? "border-purple-300 text-purple-600"
-                      : "border-gray-300 text-gray-600"
-                  }`}
-                >
-                  {promptMeta.appliedMode === "dspy" ? "DSPy applied" : "Manual prompt"}
-                </Badge>
-                <span className="font-medium text-gray-700">
-                  {promptMeta.message || "Prompt strategy evaluated."}
-                </span>
-                {typeof promptMeta.coverage === "number" && (
-                  <span className="text-[11px] text-gray-500">
-                    Coverage {(promptMeta.coverage * 100).toFixed(0)}%
-                  </span>
-                )}
-                {typeof promptMeta.score === "number" && (
-                  <span className="text-[11px] text-gray-500">
-                    Score {(promptMeta.score * 100).toFixed(0)}%
-                  </span>
-                )}
-                {typeof promptMeta.retrievedFromExperience === "number" && promptMeta.retrievedFromExperience > 0 && (
-                  <span className="text-[11px] text-gray-500">
-                    Memory {promptMeta.retrievedFromExperience}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
+          {/* Prompt Strategy */}
+          <PromptStrategy
+            promptMode={promptMode}
+            setPromptMode={setPromptMode}
+            busy={busyPhase === "generate"}
+            promptMeta={promptMeta}
+          />
 
           {/* Advanced Options */}
-          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 h-auto p-2"
-              >
-                {showAdvanced ? (
-                  <ChevronUp className="size-4" />
-                ) : (
-                  <ChevronDown className="size-4" />
-                )}
-                Advanced Options
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-3 space-y-4">
-              <Alert className="border-gray-200 bg-gray-50">
-                <Info className="size-4" />
-                <AlertDescription className="text-gray-600">
-                  More controls coming soon — language preferences, transcript syncing, and export formats.
-                </AlertDescription>
-              </Alert>
-
-              {/* JSON Bonus (DSPy) */}
-              <JSONBonusControl enabled={promptMode === "dspy"} />
-
-              {/* Feature Importance (DSPy) */}
-              <FeatureImportanceControl enabled={promptMode === "dspy"} schemaType={schemaType} />
-
-              {/* Validation Mode (DSPy) */}
-              <ValidationModeControl enabled={promptMode === "dspy"} />
-
-              {/* Parallel Evaluation (DSPy) */}
-              <ParallelEvalControl enabled={promptMode === "dspy"} />
-
-              {/* DSPy Cache Controls */}
-              <DSPyCacheControl schemaType={schemaType} promptMeta={promptMeta} />
-
-              <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white/80 p-4 shadow-sm">
-                <div className="space-y-1 pr-4">
-                  <p className="text-sm font-medium text-gray-800">Promote DSPy prompt to baseline defaults</p>
-                  <p className="text-xs text-gray-500">
-                    When enabled, any parsed DSPy run that beats the stored score will overwrite the default prompt for this
-                    schema. Handy for letting strong runs become the new baseline.
-                  </p>
-                  {promptMode !== "dspy" ? (
-                    <p className="text-xs text-gray-400">Switch to DSPy mode to activate this setting.</p>
-                  ) : null}
-                  {promptMeta?.baselinePromoted ? (
-                    <Badge variant="outline" className="mt-1 border-emerald-300 bg-emerald-50 text-emerald-600">
-                      Baseline updated this run
-                    </Badge>
-                  ) : null}
-                </div>
-                <Switch
-                  checked={promoteBaseline}
-                  onCheckedChange={(checked) => setPromoteBaseline(Boolean(checked))}
-                  aria-label="Toggle prompt baseline promotion"
-                  disabled={promptMode !== "dspy"}
-                />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+          <AdvancedOptionsPanel
+            open={showAdvanced}
+            onOpenChange={setShowAdvanced}
+            schemaType={schemaType}
+            promptMode={promptMode}
+            promoteBaseline={promoteBaseline}
+            setPromoteBaseline={setPromoteBaseline}
+            promptMeta={promptMeta}
+          />
         </CardContent>
 
         <CardFooter className="flex flex-col items-start gap-3">
