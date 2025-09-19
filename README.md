@@ -145,6 +145,34 @@ Ideal for meeting recordings and discussions:
 - **Enforce Schema**: Strict JSON validation
 - **Prompt Strategy**: Manual or DSPy optimization
 
+### Architecture Improvements
+
+The codebase has been significantly refactored for better maintainability and performance:
+
+#### Code Organization
+- **Service Layer**: Business logic extracted from API routes (90%+ size reduction)
+- **Hook Decomposition**: 855-line monolithic hook split into 6 focused hooks
+- **Type Organization**: Consolidated into `/lib/types/` with domain separation
+- **Component Extraction**: Large components broken down (e.g., ScreenshotCard)
+
+#### Performance Optimizations
+- **React.memo**: Components memoized with custom equality functions
+- **useCallback/useMemo**: Strategic optimization of expensive operations
+- **Lazy Loading**: Performance-critical components optimized
+- **State Granularity**: Reduced re-renders through focused state management
+
+#### Security & Validation
+- **SSRF Protection**: URI validation prevents server-side request forgery
+- **Type Safety**: Comprehensive request/response validation
+- **Error Handling**: Structured logging system with AppError classes
+- **Media Validation**: Strict content-type and URI checking
+
+#### Developer Experience
+- **Barrel Exports**: Cleaner imports with `/lib/types` and `/components/ui`
+- **Code Reusability**: Hooks can be used independently
+- **Testing**: Smaller, focused units easier to test
+- **Debugging**: Enhanced error messages and structured logging
+
 ### Advanced DSPy Options
 
 - **JSON Bonus Weight**: Adjusts preference for valid JSON (0-1)
@@ -307,19 +335,36 @@ The system uses several configuration approaches:
 ```
 ai-tutorial-gen/
 ├── app/                    # Next.js App Router
-│   ├── api/               # API routes
+│   ├── api/               # API routes (refactored with service layer)
 │   ├── globals.css        # Global styles
 │   ├── layout.tsx         # Root layout
 │   └── page.tsx           # Home page
-├── components/            # React components
+├── components/            # React components (performance optimized)
 │   ├── ui/                # Reusable UI components
 │   └── workbench/         # Main application components
-├── hooks/                 # Custom React hooks
-├── lib/                   # Utility functions
+├── hooks/                 # Custom React hooks (extracted from monolith)
+│   ├── useVideoUpload.ts      # Video file handling and validation
+│   ├── useScreenshotManager.ts # Screenshot capture and management
+│   ├── useGenerationState.ts  # AI generation options and DSPy state
+│   ├── useToast.ts            # Toast notification system
+│   ├── useLocalStorage.ts     # SSR-safe localStorage management
+│   └── useKeyboardShortcuts.ts # Keyboard event handling
+├── lib/                   # Core utilities and services
+│   ├── services/          # Business logic layer
+│   │   ├── videoService.ts        # Video upload and processing
+│   │   ├── generationService.ts   # AI generation with DSPy
+│   │   └── exportService.ts       # PDF generation and export
+│   ├── validators/        # Security and type validation
+│   │   ├── mediaValidators.ts     # SSRF-safe URI validation
+│   │   └── requestValidators.ts   # Type-safe request validation
+│   ├── types/            # Organized type definitions
+│   │   ├── api.ts             # API request/response types
+│   │   └── domain.ts          # Business domain types
+│   ├── errors.ts          # Enhanced error handling system
 │   ├── gemini.ts          # Gemini AI client
 │   ├── geminiPrompts.ts   # Prompt templates
 │   ├── dspy.ts            # DSPy integration
-│   └── types.ts           # TypeScript definitions
+│   └── types.ts           # TypeScript definitions (barrel export)
 ├── python/                # DSPy optimization system
 │   ├── cache/             # Optimization cache
 │   ├── dspy_optimize.py   # Main optimization script
@@ -329,35 +374,66 @@ ai-tutorial-gen/
 
 ### Key Components
 
-- **VideoWorkbench**: Main application interface
+#### Main Application Components
+- **VideoWorkbench**: Main application interface (performance optimized)
 - **UploadSection**: Video upload and preview
 - **ScreenshotSection**: Screenshot capture and management
 - **OptionsSection**: Configuration and settings
 - **ResultSection**: Generated content display
-- **useVideoWorkbench**: Central state management hook
+- **ScreenshotCard**: Extracted card component (memoized)
+
+#### Custom Hooks (Extracted Architecture)
+- **useVideoWorkbench**: Orchestrating hook (refactored from 855-line monolith)
+- **useVideoUpload**: Video file handling, validation, and Gemini upload
+- **useScreenshotManager**: Screenshot capture, ordering, and management
+- **useGenerationState**: AI generation options and DSPy configuration
+- **useToast**: Toast notification system with queueing
+- **useLocalStorage**: SSR-safe localStorage with TypeScript
+- **useKeyboardShortcuts**: Keyboard event handling and shortcuts
+
+#### Service Layer
+- **videoService**: Video upload and screenshot processing logic
+- **generationService**: AI generation with DSPy optimization
+- **exportService**: PDF generation (extracted 700+ lines from API routes)
 
 ### State Management
 
-The application uses a centralized React hook (`useVideoWorkbench`) for state management:
+The application uses a **modular hook composition pattern**, with `useVideoWorkbench` orchestrating multiple focused hooks:
 
 ```typescript
+// Main orchestrating hook (refactored from 855-line monolith)
 const {
-  // Video state
-  videoFile, videoUrl, videoMetadata,
+  // Video management (delegated to useVideoUpload)
+  videoFile, videoUrl, videoMetadata, handleVideoSelect,
 
-  // Screenshot management
-  shots, handleCaptureShot, handleRemoveShot,
+  // Screenshot management (delegated to useScreenshotManager)
+  shots, handleCaptureShot, handleRemoveShot, handleShotUpdate,
 
-  // Configuration
-  schemaType, promptMode, dspyConfig,
+  // Generation state (delegated to useGenerationState)
+  schemaType, promptMode, dspyConfig, titleHint,
 
-  // Generation
-  handleGenerate, resultText, busy,
+  // Processing and results
+  handleGenerate, resultText, busy, promptMeta,
 
-  // Export
-  handleExportPdf
+  // Export functionality
+  handleExportPdf,
+
+  // Toast notifications (delegated to useToast)
+  showToast, toasts
 } = useVideoWorkbench();
+
+// Individual focused hooks can also be used directly:
+const uploadHook = useVideoUpload({ onSuccess: handleUploadComplete });
+const screenshotHook = useScreenshotManager(videoRef, { maxShots: 10 });
+const generationHook = useGenerationState();
 ```
+
+#### Hook Composition Benefits
+- **Single Responsibility**: Each hook handles one domain area
+- **Reusability**: Hooks can be used independently in other components
+- **Testability**: Smaller, focused units are easier to test
+- **Performance**: Granular re-renders based on specific state changes
+- **Maintainability**: 855-line monolith broken into 6 focused hooks
 
 ### Adding New Features
 
