@@ -36,7 +36,7 @@ const TUTORIAL_SCHEMA_CONFIG: SchemaConfig = {
   persona:
     "You are an expert technical writer.",
   requirements: [
-    "- Analyze the video and the provided named screenshots to produce a complete, concise step-by-step tutorial.",
+    "- Analyze the video and the provided named screenshots to produce a complete, detailed, comprehensive step-by-step tutorial.",
     "- Focus strictly on observable actions and visual cues present in the video.",
     "- Provide a short, descriptive title and a 2-3 sentence summary for the tutorial.",
     "- Include any necessary prerequisites.",
@@ -46,12 +46,17 @@ const TUTORIAL_SCHEMA_CONFIG: SchemaConfig = {
     "- Ensure descriptions are actionable, specific, and directly grounded in both the video actions and the content of the captured screenshots.",
     "- Utilize screenshot timecodes (e.g., s1 @01:32) to reinforce chronological ordering and relevance of steps.",
     "- The final tutorial MUST be returned as STRICT JSON. The JSON structure should include top-level keys for 'title' (string), 'summary' (string), 'prerequisites' (an array of strings), and 'steps' (an array of objects). Each step object must contain 'stepTitle' (string), 'description' (string), 'timecodes' (an object with 'start' and 'end' strings, if available), and 'screenshots' (an array of strings, listing relevant screenshot IDs). Ensure all JSON is valid and well-formatted.",
+    "- Provide in-depth explanations for non-trivial steps: include the purpose, expected outcome, and any relevant context behind the action.",
+    "- When settings, parameters, or UI choices are visible, briefly justify why they are chosen and note viable alternatives when applicable.",
+    "- Call out common pitfalls, warnings, and troubleshooting tips inline where relevant to help users avoid errors.",
+    "- Define or clarify domain-specific terms encountered in the interface the first time they appear.",
+    "- Where helpful, connect actions to broader workflows or best practices to enhance the tutorial's educational value."
   ].join("\n"),
   fallbackOutput:
     "If JSON output is not possible, return a well-structured Markdown tutorial with numbered steps. When placing images, include lines like: [screenshots: s3, s5].",
   schema: TutorialSchema,
   hintLabel: "title",
-  styleGuide: "Maintain a clear, concise, and professional tone. Use active voice. Avoid jargon where simpler terms suffice. Ensure all instructions are unambiguous.",
+  styleGuide: "Maintain a clear, thorough, and professional tone. Prioritize completeness and educational clarity over brevity. Use active voice. Avoid unnecessary jargon; define key terms when first introduced. When helpful, include brief rationale, context, and warnings within step descriptions. Ensure all instructions are unambiguous and reproducible.",
 };
 
 const CONFIG_MAP: Record<SchemaType, SchemaConfig> = {

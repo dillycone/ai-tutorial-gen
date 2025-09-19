@@ -11,7 +11,18 @@ const FALLBACK_ERROR = "Export failed";
 
 const PAGE_WIDTH = 612; // 8.5in * 72dpi
 const PAGE_HEIGHT = 792; // 11in * 72dpi
-const PAGE_MARGIN = 48;
+const PAGE_MARGIN = 64;
+
+// Spacing scale (in points)
+const SP = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
+
+// Color palette for text and lines
+const COLORS = {
+  text: rgb(0, 0, 0),
+  muted: rgb(0.35, 0.35, 0.35),
+  divider: rgb(0.86, 0.86, 0.86),
+  figureBorder: rgb(0.8, 0.8, 0.8),
+};
 
 const TITLE_SIZE = 24;
 const SUBTITLE_SIZE = 18;
@@ -26,10 +37,11 @@ const FOOTER_SIZE = 10;
 const MIN_LINES_AFTER_HEADING = 2;
 
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
-const LEADING = (pt: number) => pt + LINE_GAP; // simple line-height
+// Professional leading factor for line height
+const BASE_LEADING = 1.35;
 
 function lineHeightFor(size: number) {
-  return LEADING(size);
+  return Math.round(size * BASE_LEADING);
 }
 
 type ShotForExport = {
@@ -134,7 +146,9 @@ type PdfContext = {
   doc: PDFDocument;
   bold: Awaited<ReturnType<PDFDocument["embedStandardFont"]>>;
   regular: Awaited<ReturnType<PDFDocument["embedStandardFont"]>>;
+  italic: Awaited<ReturnType<PDFDocument["embedStandardFont"]>>;
   embeddedShots: Map<string, EmbeddedShot>;
+  figureNumbers: Map<string, number>;
 };
 
 type PageState = {
@@ -146,9 +160,10 @@ async function buildPdf({ schemaType, parsed, resultText, shots, enforceSchema }
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const italic = await doc.embedFont(StandardFonts.HelveticaOblique);
 
-  const embeddedShots = await embedShots(doc, shots);
-  const ctx: PdfContext = { doc, bold, regular, embeddedShots };
+  const { embeddedShots, figureNumbers } = await embedShots(doc, shots);
+  const ctx: PdfContext = { doc, bold, regular, italic, embeddedShots, figureNumbers };
 
   let state = addPage(ctx);
 
@@ -184,9 +199,7 @@ function renderTutorial(ctx: PdfContext, state: PageState, tutorial: TutorialSch
 
   if (Array.isArray(tutorial.prerequisites) && tutorial.prerequisites.length) {
     state = drawHeading(ctx, state, "Prerequisites", HEADING_SIZE);
-    tutorial.prerequisites.forEach((item, idx) => {
-      state = drawParagraph(ctx, state, `${idx + 1}. ${item}`, BODY_SIZE);
-    });
+    state = drawBulletedList(ctx, state, tutorial.prerequisites);
   }
 
   if (Array.isArray(tutorial.steps)) {
@@ -196,7 +209,7 @@ function renderTutorial(ctx: PdfContext, state: PageState, tutorial: TutorialSch
         state,
         `Step ${step.index ?? index + 1}: ${step.title ?? "Untitled Step"}`,
         SUBTITLE_SIZE,
-        { keepNextLines: 2 },
+        { keepNextLines: 3, marginTop: SP.xl, marginBottom: SP.sm },
       );
       if (step.description) {
         state = drawParagraph(ctx, state, step.description, BODY_SIZE);
@@ -206,12 +219,12 @@ function renderTutorial(ctx: PdfContext, state: PageState, tutorial: TutorialSch
         const timing: string[] = [];
         if (step.startTimecode) timing.push(`Start: ${step.startTimecode}`);
         if (step.endTimecode) timing.push(`End: ${step.endTimecode}`);
-        state = drawParagraph(ctx, state, timing.join(" · "), SMALL_SIZE);
+        state = drawMeta(ctx, state, timing.join(" · "));
       }
 
       if (Array.isArray(step.screenshotIds) && step.screenshotIds.length > 0) {
         step.screenshotIds.forEach((shotId) => {
-          state = drawShot(ctx, state, shotId);
+          state = drawFigure(ctx, state, shotId);
         });
       }
     });
@@ -222,26 +235,28 @@ function renderTutorial(ctx: PdfContext, state: PageState, tutorial: TutorialSch
 
 function renderMeetingSummary(ctx: PdfContext, state: PageState, summary: MeetingSummarySchema) {
   state = drawTitle(ctx, state, summary.meetingTitle || "Meeting Summary");
+
   const meta: string[] = [];
   if (summary.meetingDate) meta.push(`Date: ${summary.meetingDate}`);
   if (typeof summary.durationMinutes === "number") meta.push(`Duration: ${summary.durationMinutes} minutes`);
   if (meta.length) {
-    state = drawParagraph(ctx, state, meta.join(" · "), SMALL_SIZE);
+    state = drawMeta(ctx, state, meta.join(" · "));
   }
+
   if (summary.summary) {
     state = drawParagraph(ctx, state, summary.summary, BODY_SIZE);
   }
 
   if (Array.isArray(summary.attendees) && summary.attendees.length) {
-    state = drawHeading(ctx, state, "Attendees", HEADING_SIZE);
-    summary.attendees.forEach((attendee) => {
-      const line = [attendee.name, attendee.role, attendee.department].filter(Boolean).join(" · ");
-      state = drawParagraph(ctx, state, line, BODY_SIZE);
-    });
+    state = drawHeading(ctx, state, "Attendees", HEADING_SIZE, { marginTop: SP.lg });
+    const attendeeLines = summary.attendees.map((attendee) =>
+      [attendee.name, attendee.role, attendee.department].filter(Boolean).join(" · ")
+    );
+    state = drawBulletedList(ctx, state, attendeeLines);
   }
 
   if (Array.isArray(summary.keyTopics) && summary.keyTopics.length) {
-    state = drawHeading(ctx, state, "Key Topics", HEADING_SIZE);
+    state = drawHeading(ctx, state, "Key Topics", HEADING_SIZE, { marginTop: SP.lg });
     summary.keyTopics
       .slice()
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -255,7 +270,7 @@ function renderMeetingSummary(ctx: PdfContext, state: PageState, summary: Meetin
         );
         const metaLine = [topic.speaker, topic.startTimecode, topic.endTimecode].filter(Boolean).join(" · ");
         if (metaLine) {
-          state = drawParagraph(ctx, state, metaLine, SMALL_SIZE);
+          state = drawMeta(ctx, state, metaLine);
         }
         if (topic.details) {
           state = drawParagraph(ctx, state, topic.details, BODY_SIZE);
@@ -279,10 +294,8 @@ function renderMeetingSummary(ctx: PdfContext, state: PageState, summary: Meetin
   });
 
   if (Array.isArray(summary.followUps) && summary.followUps.length) {
-    state = drawHeading(ctx, state, "Follow Ups", HEADING_SIZE);
-    summary.followUps.forEach((item, idx) => {
-      state = drawParagraph(ctx, state, `${idx + 1}. ${item}`, BODY_SIZE);
-    });
+    state = drawHeading(ctx, state, "Follow Ups", HEADING_SIZE, { marginTop: SP.lg });
+    state = drawBulletedList(ctx, state, summary.followUps);
   }
 
   return state;
@@ -323,8 +336,14 @@ function renderFallback(
 function renderShotsAppendix(ctx: PdfContext, state: PageState) {
   state = addPage(ctx);
   state = drawTitle(ctx, state, "Screenshot Appendix");
-  for (const shotId of ctx.embeddedShots.keys()) {
-    state = drawShot(ctx, state, shotId);
+
+  // Render figures in ascending figure number order
+  const orderedIds = Array.from(ctx.figureNumbers.entries())
+    .sort((a, b) => (a[1] ?? 0) - (b[1] ?? 0))
+    .map(([id]) => id);
+
+  for (const shotId of orderedIds) {
+    state = drawFigure(ctx, state, shotId);
   }
   return state;
 }
@@ -333,88 +352,40 @@ function addFooters(ctx: PdfContext, title?: string) {
   const pages = ctx.doc.getPages();
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
-    const y = 24; // below content margin
+    const dividerY = 36;
+    const textY = 28;
     const num = `${i + 1}/${pages.length}`;
     const numWidth = ctx.regular.widthOfTextAtSize(num, FOOTER_SIZE);
+
+    // Subtle divider above footer text
+    page.drawRectangle({
+      x: PAGE_MARGIN,
+      y: dividerY,
+      width: CONTENT_WIDTH,
+      height: 0.6,
+      fillColor: COLORS.divider,
+    });
 
     if (title) {
       page.drawText(title, {
         x: PAGE_MARGIN,
-        y,
+        y: textY,
         font: ctx.regular,
         size: FOOTER_SIZE,
-        color: rgb(0.4, 0.4, 0.4),
+        color: COLORS.muted,
       });
     }
 
     page.drawText(num, {
       x: PAGE_WIDTH - PAGE_MARGIN - numWidth,
-      y,
+      y: textY,
       font: ctx.regular,
       size: FOOTER_SIZE,
-      color: rgb(0.4, 0.4, 0.4),
+      color: COLORS.muted,
     });
   }
 }
 
-function drawShot(ctx: PdfContext, state: PageState, shotId: string) {
-  const entry = ctx.embeddedShots.get(shotId);
-  if (!entry) return state;
-
-  const labelText = `${entry.shot.label || entry.shot.id} (${entry.shot.timecode})`;
-  const noteText = entry.shot.note || "";
-
-  const labelH = measureParagraphHeight(ctx, labelText, BODY_SIZE, ctx.bold);
-  const noteH = noteText ? measureParagraphHeight(ctx, noteText, SMALL_SIZE) : 0;
-
-  // Compute the max image height that can fit on this page with label+note
-  const available = state.y - PAGE_MARGIN - labelH - noteH - 2 * LINE_GAP;
-  let scale = Math.min(1, CONTENT_WIDTH / entry.width);
-  let imgH = entry.height * scale;
-  let imgW = entry.width * scale;
-
-  if (available <= 0 || imgH > available) {
-    // Try scaling to available height; if still not feasible, go to a new page
-    const heightScale = Math.max(0, available) / entry.height;
-    if (heightScale >= 0.25) {
-      scale = Math.min(scale, heightScale);
-      imgH = entry.height * scale;
-      imgW = entry.width * scale;
-    } else {
-      state = addPage(ctx);
-    }
-  }
-
-  // If we added a page, recompute available and sizes from the top of the new page
-  if (imgH > state.y - PAGE_MARGIN - labelH - noteH - 2 * LINE_GAP) {
-    const freshAvail = state.y - PAGE_MARGIN - labelH - noteH - 2 * LINE_GAP;
-    const heightScale = Math.min(1, freshAvail / entry.height);
-    scale = Math.min(CONTENT_WIDTH / entry.width, heightScale);
-    imgH = entry.height * scale;
-    imgW = entry.width * scale;
-  }
-
-  // Draw label (kept together)
-  state = drawParagraph(ctx, state, labelText, BODY_SIZE, { bold: true, keepTogether: true });
-
-  // Draw image
-  state = ensureSpaceForImage(ctx, state, imgH);
-  state.page.drawImage(entry.image, {
-    x: PAGE_MARGIN + (CONTENT_WIDTH - imgW) / 2,
-    y: state.y - imgH,
-    width: imgW,
-    height: imgH,
-  });
-  state.y -= imgH + LINE_GAP;
-
-  // Draw caption/note (kept together)
-  if (noteText) {
-    state = drawParagraph(ctx, state, noteText, SMALL_SIZE, { keepTogether: true });
-  }
-
-  state.y -= LINE_GAP;
-  return state;
-}
 
 function addPage(ctx: PdfContext): PageState {
   const page = ctx.doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
@@ -428,12 +399,124 @@ function ensureSpace(ctx: PdfContext, state: PageState, requiredHeight: number) 
   return state;
 }
 
-function ensureSpaceForImage(ctx: PdfContext, state: PageState, imageHeight: number) {
-  if (state.y - imageHeight - LINE_GAP <= PAGE_MARGIN) {
-    state = addPage(ctx);
+function ensureSpaceForGroup(ctx: PdfContext, state: PageState, requiredHeight: number) {
+  // Reserve space for a multi-element block (e.g., label + image + caption).
+  // If it won't fit on the current page, start a new page before rendering.
+  if (state.y - requiredHeight <= PAGE_MARGIN) {
+    return addPage(ctx);
   }
   return state;
 }
+
+function drawFigure(ctx: PdfContext, state: PageState, shotId: string) {
+  const entry = ctx.embeddedShots.get(shotId);
+  if (!entry) return state;
+
+  const figNo = ctx.figureNumbers.get(shotId) ?? 0;
+  const baseTitle =
+    entry.shot.label && entry.shot.label.trim()
+      ? entry.shot.label.trim()
+      : (figNo ? `Screenshot ${figNo}` : "Screenshot");
+  const time = entry.shot.timecode ? ` (${entry.shot.timecode})` : "";
+  const labelText = `Figure ${figNo || ""}${figNo ? ": " : ""}${baseTitle}${time}`;
+  const captionText = entry.shot.note && entry.shot.note.trim() ? entry.shot.note.trim() : "";
+
+  // Measure label and caption to compute total block height.
+  const labelH = measureParagraphHeight(ctx, labelText, SMALL_SIZE, ctx.bold);
+  const captionH = captionText ? measureParagraphHeight(ctx, captionText, SMALL_SIZE, ctx.italic) : 0;
+
+  // Spacing within the figure block
+  const gapAfterLabel = SP.sm;
+  const gapBeforeCaption = captionText ? SP.xs : 0;
+  const bottomMargin = SP.md;
+
+  // First pass: compute image scale with current page space.
+  const widthScale = Math.min(1, CONTENT_WIDTH / entry.width);
+  const nonImageSpace = labelH + gapAfterLabel + gapBeforeCaption + captionH + bottomMargin;
+  let availableForImage = state.y - PAGE_MARGIN - nonImageSpace;
+  let scale = availableForImage > 0 ? Math.min(widthScale, availableForImage / entry.height) : widthScale;
+  let imgW = entry.width * scale;
+  let imgH = entry.height * scale;
+
+  // Compute full block height
+  let blockH = labelH + gapAfterLabel + imgH + (captionText ? gapBeforeCaption + captionH : 0) + bottomMargin;
+
+  // If the whole block won't fit, add a page and recalc with fresh space.
+  if (state.y - blockH <= PAGE_MARGIN) {
+    state = addPage(ctx);
+    availableForImage = state.y - PAGE_MARGIN - nonImageSpace;
+    scale = Math.min(widthScale, Math.max(0, availableForImage) / entry.height);
+    imgW = entry.width * scale;
+    imgH = entry.height * scale;
+    blockH = labelH + gapAfterLabel + imgH + (captionText ? gapBeforeCaption + captionH : 0) + bottomMargin;
+  }
+
+  // Ensure space for the entire block to avoid overlays.
+  state = ensureSpaceForGroup(ctx, state, blockH);
+
+  // Draw label (bold, small) with wrapping
+  const labelLines = wrapText(labelText, ctx.bold, SMALL_SIZE, CONTENT_WIDTH);
+  for (const line of labelLines) {
+    state = ensureSpace(ctx, state, lineHeightFor(SMALL_SIZE));
+    state.page.drawText(line, {
+      x: PAGE_MARGIN,
+      y: state.y,
+      font: ctx.bold,
+      size: SMALL_SIZE,
+      color: COLORS.text,
+    });
+    state.y -= lineHeightFor(SMALL_SIZE);
+  }
+
+  // Gap between label and image
+  state.y -= gapAfterLabel;
+
+  // Draw image with subtle border, centered
+  const imgX = PAGE_MARGIN + (CONTENT_WIDTH - imgW) / 2;
+  const imgY = state.y - imgH;
+
+  // Border rectangle
+  state.page.drawRectangle({
+    x: imgX - 2,
+    y: imgY - 2,
+    width: imgW + 4,
+    height: imgH + 4,
+    borderColor: COLORS.figureBorder,
+    borderWidth: 1,
+  });
+
+  // Image
+  state.page.drawImage(entry.image, {
+    x: imgX,
+    y: imgY,
+    width: imgW,
+    height: imgH,
+  });
+  state.y -= imgH;
+
+  // Caption (italic, muted)
+  if (captionText) {
+    state.y -= gapBeforeCaption;
+    const captionLines = wrapText(captionText, ctx.italic, SMALL_SIZE, CONTENT_WIDTH);
+    for (const line of captionLines) {
+      state = ensureSpace(ctx, state, lineHeightFor(SMALL_SIZE));
+      state.page.drawText(line, {
+        x: PAGE_MARGIN,
+        y: state.y,
+        font: ctx.italic,
+        size: SMALL_SIZE,
+        color: COLORS.muted,
+      });
+      state.y -= lineHeightFor(SMALL_SIZE);
+    }
+  }
+
+  // Bottom margin after figure
+  state.y -= bottomMargin;
+
+  return state;
+}
+
 
 function drawTitle(ctx: PdfContext, state: PageState, text: string) {
   state = ensureSpace(ctx, state, TITLE_SIZE + LINE_GAP * 2);
@@ -453,20 +536,35 @@ function drawHeading(
   state: PageState,
   text: string,
   size: number,
-  options: { keepNextLines?: number } = {},
+  options: { keepNextLines?: number; marginTop?: number; marginBottom?: number } = {},
 ) {
-  const keep = options.keepNextLines ?? (size >= SUBTITLE_SIZE ? MIN_LINES_AFTER_HEADING : 1);
-  const reserve = lineHeightFor(size) + keep * lineHeightFor(BODY_SIZE) + LINE_GAP;
-  state = ensureSpace(ctx, state, reserve);
+  // Defaults scale with heading size: larger headings get more space and keep more following lines together.
+  const keepNext = options.keepNextLines ?? (size >= SUBTITLE_SIZE ? 3 : 2);
+  const marginTop = options.marginTop ?? (size >= SUBTITLE_SIZE ? SP.xl : SP.lg);
+  const marginBottom = options.marginBottom ?? SP.sm;
+
+  // Apply top margin unless we're at the top of a fresh page.
+  if (state.y < PAGE_HEIGHT - PAGE_MARGIN && marginTop) {
+    state.y -= marginTop;
+  }
+
+  // Reserve space for heading line plus the requested number of body lines to keep with it.
+  const reserve = lineHeightFor(size) + keepNext * lineHeightFor(BODY_SIZE) + SP.sm;
+  state = ensureSpaceForGroup(ctx, state, reserve);
 
   state.page.drawText(text, {
     x: PAGE_MARGIN,
     y: state.y,
     font: ctx.bold,
     size,
-    color: rgb(0, 0, 0),
+    color: COLORS.text,
   });
   state.y -= lineHeightFor(size);
+
+  // Bottom margin after the heading
+  if (marginBottom) {
+    state.y -= marginBottom;
+  }
   return state;
 }
 
@@ -475,9 +573,24 @@ function drawParagraph(
   state: PageState,
   text: string,
   size: number,
-  options: { bold?: boolean; keepTogether?: boolean } = {},
+  options: {
+    bold?: boolean;
+    keepTogether?: boolean;
+    marginTop?: number;
+    marginBottom?: number;
+    color?: ReturnType<typeof rgb>;
+  } = {},
 ) {
   const font = options.bold ? ctx.bold : ctx.regular;
+  const color = options.color ?? COLORS.text;
+  const marginTop = options.marginTop ?? 0;
+  const marginBottom = options.marginBottom ?? SP.sm;
+
+  // Apply top margin unless we're at the very top of a page.
+  if (state.y < PAGE_HEIGHT - PAGE_MARGIN && marginTop) {
+    state.y -= marginTop;
+  }
+
   const paragraphs = text.split(/\n+/).filter(Boolean);
 
   paragraphs.forEach((paragraph, pIndex) => {
@@ -485,7 +598,7 @@ function drawParagraph(
     const blockHeight = lines.length * lineHeightFor(size);
 
     if (options.keepTogether) {
-      state = ensureSpace(ctx, state, blockHeight);
+      state = ensureSpaceForGroup(ctx, state, blockHeight);
     }
     for (const line of lines) {
       state = ensureSpace(ctx, state, lineHeightFor(size));
@@ -494,14 +607,170 @@ function drawParagraph(
         y: state.y,
         font,
         size,
-        color: rgb(0, 0, 0),
+        color,
       });
       state.y -= lineHeightFor(size);
     }
     if (pIndex !== paragraphs.length - 1) {
-      state.y -= LINE_GAP;
+      state.y -= SP.xs;
     }
   });
+
+  // Bottom margin after the paragraph block
+  if (marginBottom) {
+    state.y -= marginBottom;
+  }
+
+  return state;
+}
+
+// Small, muted metadata lines (e.g., timecodes), default italic
+function drawMeta(
+  ctx: PdfContext,
+  state: PageState,
+  text: string,
+  options: { italic?: boolean; marginTop?: number; marginBottom?: number } = {},
+) {
+  const useItalic = options.italic ?? true;
+  const font = useItalic ? ctx.italic : ctx.regular;
+  const marginTop = options.marginTop ?? 0;
+  const marginBottom = options.marginBottom ?? SP.sm;
+  const color = COLORS.muted;
+
+  // Apply top margin unless we're at the top of a page.
+  if (state.y < PAGE_HEIGHT - PAGE_MARGIN && marginTop) {
+    state.y -= marginTop;
+  }
+
+  const paragraphs = text.split(/\n+/).filter(Boolean);
+  for (let p = 0; p < paragraphs.length; p++) {
+    const lines = wrapText(paragraphs[p], font, SMALL_SIZE, CONTENT_WIDTH);
+    for (const line of lines) {
+      state = ensureSpace(ctx, state, lineHeightFor(SMALL_SIZE));
+      state.page.drawText(line, {
+        x: PAGE_MARGIN,
+        y: state.y,
+        font,
+        size: SMALL_SIZE,
+        color,
+      });
+      state.y -= lineHeightFor(SMALL_SIZE);
+    }
+    if (p < paragraphs.length - 1) {
+      state.y -= SP.xs;
+    }
+  }
+
+  if (marginBottom) {
+    state.y -= marginBottom;
+  }
+
+  return state;
+}
+
+// Bulleted list with proper wrapping and spacing
+function drawBulletedList(
+  ctx: PdfContext,
+  state: PageState,
+  items: string[],
+  options: {
+    size?: number;
+    indent?: number;
+    bullet?: string;
+    gap?: number;
+    color?: ReturnType<typeof rgb>;
+  } = {},
+) {
+  const size = options.size ?? BODY_SIZE;
+  const indent = options.indent ?? 14;
+  const bullet = options.bullet ?? "•";
+  const gap = options.gap ?? SP.xs;
+  const color = options.color ?? COLORS.text;
+  const font = ctx.regular;
+
+  const textX = PAGE_MARGIN + indent;
+  const maxTextWidth = CONTENT_WIDTH - indent;
+
+  for (const raw of items) {
+    const item = String(raw ?? "").trim();
+    if (!item) continue;
+
+    const lines = wrapText(item, font, size, maxTextWidth);
+
+    // Ensure at least space for the first line
+    state = ensureSpace(ctx, state, lineHeightFor(size));
+
+    // Bullet on the first line only
+    state.page.drawText(bullet, {
+      x: PAGE_MARGIN,
+      y: state.y,
+      font,
+      size,
+      color,
+    });
+
+    // First line of text
+    if (lines.length > 0) {
+      state.page.drawText(lines[0], {
+        x: textX,
+        y: state.y,
+        font,
+        size,
+        color,
+      });
+      state.y -= lineHeightFor(size);
+    }
+
+    // Remaining lines, aligned with text indent
+    for (let i = 1; i < lines.length; i++) {
+      state = ensureSpace(ctx, state, lineHeightFor(size));
+      state.page.drawText(lines[i], {
+        x: textX,
+        y: state.y,
+        font,
+        size,
+        color,
+      });
+      state.y -= lineHeightFor(size);
+    }
+
+    // Gap between items
+    state.y -= gap;
+  }
+
+  return state;
+}
+
+// Subtle divider for visual separation between sections
+function drawDivider(
+  ctx: PdfContext,
+  state: PageState,
+  options: { marginTop?: number; marginBottom?: number } = {},
+) {
+  const marginTop = options.marginTop ?? SP.lg;
+  const marginBottom = options.marginBottom ?? SP.lg;
+
+  // Apply top margin unless we're at the top of a page.
+  if (state.y < PAGE_HEIGHT - PAGE_MARGIN && marginTop) {
+    state.y -= marginTop;
+  }
+
+  // Ensure we have a little vertical room for the divider line
+  state = ensureSpace(ctx, state, 2);
+
+  // Draw the divider at the current y
+  state.page.drawRectangle({
+    x: PAGE_MARGIN,
+    y: state.y,
+    width: CONTENT_WIDTH,
+    height: 0.6,
+    fillColor: COLORS.divider,
+  });
+
+  // Move below the divider and apply bottom margin
+  if (marginBottom) {
+    state.y -= marginBottom;
+  }
 
   return state;
 }
@@ -588,7 +857,10 @@ function isMeetingSummary(value: TutorialSchema | MeetingSummarySchema): value i
 }
 
 async function embedShots(doc: PDFDocument, shots: ShotForExport[]) {
-  const map = new Map<string, EmbeddedShot>();
+  const embeddedShots = new Map<string, EmbeddedShot>();
+  const figureNumbers = new Map<string, number>();
+  let n = 1;
+
   for (const shot of shots) {
     const decoded = decodeDataUrl(shot.dataUrl);
     if (!decoded) continue;
@@ -597,17 +869,18 @@ async function embedShots(doc: PDFDocument, shots: ShotForExport[]) {
       const image = decoded.mime.includes("jpeg")
         ? await doc.embedJpg(decoded.bytes)
         : await doc.embedPng(decoded.bytes);
-      map.set(shot.id, {
+      embeddedShots.set(shot.id, {
         shot,
         image,
         width: image.width,
         height: image.height,
       });
+      figureNumbers.set(shot.id, n++);
     } catch {
       // Skip un-embeddable images
     }
   }
-  return map;
+  return { embeddedShots, figureNumbers };
 }
 
 function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mime: string } | null {

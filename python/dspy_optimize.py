@@ -217,11 +217,16 @@ DEFAULT_INSTRUCTIONS = textwrap.dedent(
       3. `optimization_brief` – bullet list of refinements that must be reflected.
 
     **Output:** Return STRICT JSON with:
-      * `persona` (string) – refined expert role.
-      * `requirements` (array of strings) – each entry is a standalone directive.
+      * `persona` (string) – refined expert role that frames deep, comprehensive instruction.
+      * `requirements` (array of strings) – each entry is a standalone directive that promotes
+        thorough, educational, and step-by-step behavior; prioritize completeness and clarity
+        over brevity (include rationale, expected outcomes, pitfalls, definitions, and viable
+        alternatives when appropriate).
       * `fallbackOutput` (string or JSON object) – mirrors the structure the
-        assistant should fall back to when schema enforcement is off.
-      * `styleGuide` (string, optional).
+        assistant should fall back to when schema enforcement is off and must
+        support long-form, detailed content.
+      * `styleGuide` (string, optional) – emphasize clarity, completeness, and
+        reproducibility over brevity.
 
     **Core rules:**
       * Integrate every item from the optimization brief.
@@ -229,6 +234,10 @@ DEFAULT_INSTRUCTIONS = textwrap.dedent(
         timeline actions and provided screenshots.
       * Cite screenshot IDs exactly as given (`s1`, `s2`…), including timecodes
         when they appear in the context. Never invent new IDs.
+      * Prefer detailed, comprehensive, and educational guidance. Include rationale,
+        expected outcomes, definitions of domain terms on first use, common pitfalls/warnings,
+        and viable alternatives when visible. Avoid terseness that sacrifices clarity, while
+        still avoiding unnecessary repetition.
       * Schema handling:
           - If the context or brief demands strict JSON right now, add a
             requirement: "Return the complete output as a STRICT JSON object,
@@ -236,7 +245,8 @@ DEFAULT_INSTRUCTIONS = textwrap.dedent(
             express other format guidance in terms of that schema.
           - Otherwise add a conditional requirement describing how to behave when
             a JSON schema is supplied, and preserve the Markdown fallback.
-      * Keep the language clear, professional, and non-redundant.
+      * Keep the language clear and professional; prioritize educational thoroughness
+        and reproducibility over brevity.
       * Do not fabricate data or screenshots beyond what is provided.
     """
 ).strip()
@@ -249,6 +259,15 @@ class _PromptSignature(dspy.Signature):
     fallbackOutput (string or JSON object),
     styleGuide (string, optional).
     The JSON should reflect refinements implied by the optimization_brief.
+
+    Emphasize comprehensive, educational outputs over brevity:
+    - Persona should frame the assistant as a thorough expert who explains the "why", not just the "how".
+    - Requirements should be granular, standalone directives enabling in-depth step-by-step behavior
+      (include rationale, expected outcomes, pitfalls/warnings, definitions of domain terms on first use,
+      and viable alternatives when they are visible in the UI).
+    - FallbackOutput should support long-form content (rich Markdown when JSON is off, or a fully
+      specified JSON schema when enforced) so explanations remain complete and reproducible.
+    - StyleGuide should prefer clarity, completeness, and reproducibility over concision.
     """
     context_summary = dspy.InputField(desc="Summary of context")
     base_prompt = dspy.InputField(desc="Base prompt to optimize")
@@ -687,6 +706,11 @@ def _build_features(payload: Dict[str, Any]) -> Tuple[List[str], Dict[str, float
 
     entries.append(("Emphasize grounding in both the video actions and any captured screenshots", "grounding"))
 
+    # Thoroughness-focused directives to reward comprehensive explanations
+    entries.append(("Prefer detailed, comprehensive step-by-step guidance over brevity; avoid terse directives that sacrifice clarity or completeness", "thoroughness"))
+    entries.append(("Include rationale, expected outcomes, pitfalls/warnings, definitions of domain terms on first use, and viable alternatives when applicable", "thoroughness"))
+    entries.append(("Ensure explanations are educational and reproducible, with context and justifications for visible settings/parameters", "thoroughness"))
+
     # Build default category weights and apply overrides
     category_weights: Dict[str, float] = _default_category_weights(schema_type)
     # Overrides can reference category keys or exact feature strings
@@ -1116,6 +1140,8 @@ def _foundation_examples_for_schema(schema_key: str) -> List[dspy.Example]:
                 "Clarify that screenshots may be absent and the video timeline should drive structure",
                 "Mention grounding in both timeline and screenshots (when available)",
                 "Clarify how to behave when JSON schema enforcement is toggled",
+                "Prefer detailed, comprehensive guidance over brevity; avoid terseness that reduces clarity",
+                "Include rationale, expected outcomes, pitfalls/warnings, definitions of domain terms on first use, and viable alternatives when applicable",
             ],
         },
         {
@@ -1126,6 +1152,8 @@ def _foundation_examples_for_schema(schema_key: str) -> List[dspy.Example]:
                 "Spell out how to cite screenshot IDs exactly as provided (s1, s2) including timecodes",
                 "Mention grounding in both the timeline and screenshots",
                 "Clarify how to behave when JSON schema enforcement is toggled",
+                "Prefer detailed, comprehensive guidance over brevity; include step rationales and expected outcomes",
+                "Call out pitfalls/warnings and define domain terms on first use; propose viable alternatives when visible in the UI",
             ],
         },
         {
@@ -1136,6 +1164,8 @@ def _foundation_examples_for_schema(schema_key: str) -> List[dspy.Example]:
                 "Encourage grouping steps by timeline segments and cite screenshot IDs exactly as provided",
                 "Ensure chronological ordering with timecodes",
                 "Clarify how to behave when JSON schema enforcement is toggled",
+                "Prefer detailed, comprehensive guidance; provide rationale, expected outcomes, and definitions for non-trivial steps",
+                "Highlight pitfalls/warnings and note viable alternatives when screenshots show configuration choices",
             ],
         },
     ]
@@ -1263,8 +1293,61 @@ def _prepare_metric(
             json_bonus=json_bonus,
             feature_weights=feature_weights,
         )
-        raw_score = float(analysis.get("score") or 0.0)
+        base_raw_score = float(analysis.get("score") or 0.0)
         coverage = float(analysis.get("coverage") or 0.0)
+
+        # Length-based bonus (bounded, quality-gated):
+        # - Prefer longer, more comprehensive prompts, but with diminishing returns.
+        # - Gate by coverage and parsing success to avoid rewarding low-quality verbosity.
+        parsed_ok = bool(analysis.get("parsed"))
+
+        if parsed_ok:
+            persona_txt = str(analysis.get("persona") or "")
+            req_txt = str(analysis.get("requirements") or "")
+            fallback_txt = str(analysis.get("fallbackOutput") or "")
+            style_txt = str(analysis.get("styleGuide") or "")
+            combined_text = " ".join(part for part in [persona_txt, req_txt, fallback_txt, style_txt] if part)
+        else:
+            combined_text = raw if isinstance(raw, str) else str(raw or "")
+
+        # Compute character and word lengths
+        try:
+            char_len = len(combined_text)
+        except Exception:
+            char_len = len(str(combined_text))
+
+        try:
+            import re as _re
+            word_len = len(_re.findall(r"[A-Za-z0-9_]+", combined_text))
+        except Exception:
+            try:
+                word_len = len((combined_text or "").split())
+            except Exception:
+                word_len = 0
+
+        # Normalize with diminishing returns:
+        # Baselines: ~800 chars and ~150 words for initial bonus; saturate near ~8k chars / ~1500 words.
+        try:
+            char_norm = max(0.0, min(1.0, log1p(max(0, char_len - 800)) / log1p(8000)))
+        except Exception:
+            char_norm = 0.0
+        try:
+            word_norm = max(0.0, min(1.0, log1p(max(0, word_len - 150)) / log1p(1500)))
+        except Exception:
+            word_norm = 0.0
+
+        # Raw length bonus up to 0.15, weighted more by characters than words
+        length_bonus_raw = 0.15 * (0.6 * char_norm + 0.4 * word_norm)
+
+        # Quality gating: stronger when coverage is higher; reduced if JSON parsing failed
+        quality_factor = 0.5 + 0.5 * coverage  # 0.5..1.0
+        if not parsed_ok:
+            quality_factor *= 0.7  # penalize if not schema-parseable
+
+        effective_length_bonus = length_bonus_raw * max(0.0, min(1.0, quality_factor))
+
+        # Final raw score used to guide optimization
+        raw_score = min(1.0, base_raw_score + effective_length_bonus)
 
         # Confidence-adjusted score for progress (display only)
         conf_factor = 0.5 + 0.5 * confidence
@@ -1307,7 +1390,10 @@ def _prepare_metric(
                         "contextSummary": request_context_summary,
                         "basePrompt": base_prompt_text,
                         "prompt": raw,
-                        "reason": "rawImprovedAnyCoverage"
+                        "reason": "rawImprovedAnyCoverage",
+                        "lengthChars": char_len,
+                        "lengthWords": word_len,
+                        "lengthBonus": round(effective_length_bonus, 4),
                     })
             except Exception:
                 pass
@@ -1325,7 +1411,10 @@ def _prepare_metric(
                     "contextSummary": request_context_summary,
                     "basePrompt": base_prompt_text,
                     "prompt": raw,
-                    "reason": "rawImprovedAnyCoverage"
+                    "reason": "rawImprovedAnyCoverage",
+                    "lengthChars": char_len,
+                    "lengthWords": word_len,
+                    "lengthBonus": round(effective_length_bonus, 4),
                 }
             except Exception:
                 pass
@@ -1351,7 +1440,10 @@ def _prepare_metric(
                     "contextSummary": request_context_summary,
                     "basePrompt": base_prompt_text,
                     "prompt": raw,
-                    "reason": "coverageThreshold"
+                    "reason": "coverageThreshold",
+                    "lengthChars": char_len,
+                    "lengthWords": word_len,
+                    "lengthBonus": round(effective_length_bonus, 4),
                 }
                 # Save to best prompts path (high quality snapshot)
                 if best_prompts_path:
@@ -1379,7 +1471,10 @@ def _prepare_metric(
                     "contextSummary": request_context_summary,
                     "basePrompt": base_prompt_text,
                     "prompt": raw,
-                    "reason": "rawImprovedAnyCoverage"
+                    "reason": "rawImprovedAnyCoverage",
+                    "lengthChars": char_len,
+                    "lengthWords": word_len,
+                    "lengthBonus": round(effective_length_bonus, 4),
                 }
                 # Save to emergency best path to guarantee persistence
                 if emergency_best_path:
@@ -1432,6 +1527,10 @@ def _prepare_metric(
                 "bestIteration": int(best_tracker.get("iteration", 0)),
                 "bestStage": int(best_tracker.get("stage", 0)),
                 "perfectStreak": int(flags.get("perfectStreak", 0)),
+                # Length metadata (optional)
+                "lengthChars": char_len,
+                "lengthWords": word_len,
+                "lengthBonus": round(effective_length_bonus, 4),
             }
             print(json.dumps(progress_payload), flush=True)
         except Exception:
