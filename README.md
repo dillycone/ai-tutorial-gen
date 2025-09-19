@@ -11,7 +11,7 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 - **📹 Video Processing**: Upload videos and capture key screenshots at specific timestamps
 - **🤖 AI Generation**: Convert visual content into structured tutorials or meeting summaries using Gemini AI
 - **🧠 Smart Optimization**: DSPy 3 + GEPA automatically optimizes prompts for better output quality
-- **📄 Export Options**: Generate PDF documents with formatted content
+- **📄 Professional PDF Export**: Advanced PDF generation with TOC, image compression, Unicode fonts, and interactive navigation
 - **⚡ Real-time Progress**: Live updates during processing and optimization
 - **🎛️ Flexible Configuration**: Multiple schema types and prompt strategies
 - **📊 Performance Tracking**: Detailed metrics and optimization scores
@@ -30,6 +30,7 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 - **AI Provider**: Google Gemini API (@google/genai)
 - **Optimization**: DSPy 3 with GEPA (Generative Experience-driven Prompt Adaptation)
 - **Document Generation**: PDF-lib for export functionality
+- **Image Processing**: Sharp for compression and optimization
 - **Validation**: Zod schemas for type safety
 
 ### Development Tools
@@ -45,6 +46,7 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 - **Node.js** 18+ and npm/yarn/pnpm
 - **Python** 3.8+ (for DSPy optimization)
 - **Google Gemini API Key** ([Get one here](https://ai.google.dev/))
+- **Build tools** for Sharp image processing (automatically handled on most systems)
 
 ### Installation
 
@@ -94,7 +96,7 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 2. **Capture Screenshots**: Play the video and capture key moments with timestamps
 3. **Configure Options**: Choose schema type (Tutorial/Meeting Summary) and prompt strategy
 4. **Generate Content**: Process screenshots with AI to create structured output
-5. **Export**: Download as formatted PDF or copy the generated text
+5. **Export**: Customize export settings and download as formatted PDF or copy the generated text
 
 ### Video Requirements
 
@@ -135,6 +137,31 @@ Ideal for meeting recordings and discussions:
 - Adapts to your specific content style
 - Higher quality output over time
 - Requires initial training period
+
+### Export Settings
+
+Configure PDF output options via the Settings button in the Result section:
+
+#### Document Structure
+- **Table of Contents**: Auto-generated clickable navigation with PDF bookmarks
+- **Cover Page**: Professional title page with metadata (Beta)
+- **Appendix**: Screenshot gallery for easy reference
+- **URL Linkification**: Automatically detect and link URLs in text
+
+#### Image Optimization
+- **Compression**: Reduce file size by 60-80% using Sharp
+- **Quality Control**: Adjust JPEG compression (60-95%)
+- **Resolution Scaling**: Set maximum width for images (800-1920px)
+
+#### Document Metadata
+- **Custom Title**: Override generated title for footers and PDF properties
+- **Author & Subject**: Add document metadata for organization
+- **Keywords**: Enhance searchability and classification
+- **Language**: Set document language for accessibility
+
+#### Advanced Options
+- **Page Layout**: Control section breaks and page numbering
+- **Font Support**: Automatic Unicode text handling with Noto Sans fallback
 
 ## 🔧 Configuration
 
@@ -273,7 +300,7 @@ Generate content from uploaded screenshots.
 ```
 
 ### POST /api/gemini/export
-Export generated content as PDF.
+Export generated content as PDF with comprehensive formatting and optimization options.
 
 **Request:**
 ```typescript
@@ -281,13 +308,56 @@ Export generated content as PDF.
   content: string
   title: string
   schemaType: string
+  shots?: Array<{
+    id: string
+    timecode: string
+    dataURL: string
+    description?: string
+  }>
+  options?: {
+    // Document Structure
+    includeAppendix?: boolean      // Include screenshot appendix (default: true)
+    includeTOC?: boolean          // Include Table of Contents (default: true)
+    includeCover?: boolean        // Include cover page (default: false)
+    linkifyUrls?: boolean         // Make URLs clickable (default: true)
+
+    // Document Metadata
+    runningTitle?: string         // Override document title
+    author?: string              // PDF author metadata
+    subject?: string             // PDF subject metadata
+    keywords?: string[]          // PDF keywords for searchability
+    language?: string            // Document language (default: "en")
+
+    // Image Processing
+    compressImages?: boolean     // Enable image compression (default: true)
+    imageQuality?: number        // JPEG quality 0-1 (default: 0.82)
+    imageMaxWidth?: number       // Max image width in pixels (default: 1280)
+    imageMaxHeight?: number      // Max image height in pixels
+
+    // Layout Options
+    headingStartOnNewPage?: boolean  // Start sections on new pages
+    pageNumberOffset?: number        // Offset for page numbering
+  }
 }
 ```
 
 **Response:**
 ```typescript
 Blob (PDF file)
+// Headers:
+// - Content-Disposition: attachment; filename="<sanitized-title>.pdf"
+// - Content-Type: application/pdf
+// - X-Export-Warnings: JSON array of any processing warnings
 ```
+
+**Features:**
+- **Image Compression**: Up to 80% file size reduction using Sharp
+- **Unicode Support**: Full international text with Noto Sans fonts
+- **Interactive Navigation**: Clickable Table of Contents with PDF bookmarks
+- **URL Linkification**: Automatic detection and linking of URLs
+- **Professional Layout**: Consistent typography and spacing
+- **Accessibility**: Proper document structure and metadata
+- **Error Recovery**: Lenient JSON parsing handles malformed LLM output
 
 ## 🧠 DSPy Integration
 
