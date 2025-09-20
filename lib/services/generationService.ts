@@ -9,7 +9,7 @@ import {
   type PromptShotSummary,
 } from "@/lib/dspy";
 import { isTrustedUri, isValidMediaType } from "@/lib/validators/mediaValidators";
-import { AppError, logError, logWarn } from "@/lib/errors";
+import { AppError, logError } from "@/lib/errors";
 import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
 import type { GenerateRequestBody } from "@/lib/types/api";
 

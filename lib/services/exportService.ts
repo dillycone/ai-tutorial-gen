@@ -31,8 +31,6 @@ const COVER_TITLE_SIZE = 32;
 
 const LINE_GAP = 4;
 const FOOTER_SIZE = 10;
-const MIN_LINES_AFTER_HEADING = 2;
-
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 const BASE_LEADING = 1.35;
 
@@ -1201,7 +1199,7 @@ function drawMeta(
           const URL_RE = /\bhttps?:\/\/[^\s<>()\[\]{}"']+/gi;
           let match: RegExpExecArray | null;
           while ((match = URL_RE.exec(line)) !== null) {
-            let url = match[0];
+          const url = match[0];
             const trimmed = url.replace(/[).,!?:;\]]+$/g, "");
             const before = line.slice(0, match.index);
             const x = PAGE_MARGIN + font.widthOfTextAtSize(before, SMALL_SIZE);
@@ -1284,7 +1282,7 @@ function drawBulletedList(
           const URL_RE = /\bhttps?:\/\/[^\s<>()\[\]{}"']+/gi;
           let match: RegExpExecArray | null;
           while ((match = URL_RE.exec(first)) !== null) {
-            let url = match[0];
+            const url = match[0];
             const trimmed = url.replace(/[).,!?:;\]]+$/g, "");
             const before = first.slice(0, match.index);
             const x = textX + font.widthOfTextAtSize(before, size);
@@ -1318,7 +1316,7 @@ function drawBulletedList(
           const URL_RE = /\bhttps?:\/\/[^\s<>()\[\]{}"']+/gi;
           let match: RegExpExecArray | null;
           while ((match = URL_RE.exec(line)) !== null) {
-            let url = match[0];
+            const url = match[0];
             const trimmed = url.replace(/[).,!?:;\]]+$/g, "");
             const before = line.slice(0, match.index);
             const x = textX + font.widthOfTextAtSize(before, size);

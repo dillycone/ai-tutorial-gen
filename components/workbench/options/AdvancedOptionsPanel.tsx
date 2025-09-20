@@ -10,7 +10,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChevronDown, ChevronUp, Info } from "lucide-react";
 import JSONBonusControl from "@/components/workbench/controls/JSONBonusControl";
 import FeatureImportanceControl from "@/components/workbench/controls/FeatureImportanceControl";

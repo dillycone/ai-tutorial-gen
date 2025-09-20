@@ -14,14 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import {
-  Eye,
-  Trash2,
-  ArrowLeft,
-  ArrowRight,
-  Image as ImageIcon,
-  Clock,
-} from "lucide-react";
+import { Eye, Trash2, ArrowLeft, ArrowRight, Clock } from "lucide-react";
 
 type ScreenshotCardProps = {
   shot: Shot;
