@@ -2,7 +2,14 @@
 
 import type { GeminiFileRef } from "@/lib/geminiUploads";
 import type { PromptOptimizationMeta } from "@/lib/types";
-import type { ExportRequestBody, GenerateRequestBody } from "@/lib/types/api";
+import type {
+  ExportRequestBody,
+  GenerateRequestBody,
+  TranscriptRequestBody,
+  TranscriptResponseBody,
+  KeyframeRequestBody,
+  KeyframeResponseBody,
+} from "@/lib/types/api";
 import type { UploadedScreenshot } from "@/lib/services/videoService";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -121,6 +128,54 @@ const parseContentDispositionFilename = (header: string | null): string | undefi
   const match = /filename="?([^";]+)"?/i.exec(header);
   return match && match[1] ? match[1] : undefined;
 };
+
+export async function generateTranscriptFromVideo(
+  payload: TranscriptRequestBody,
+): Promise<TranscriptResponseBody> {
+  const response = await fetch("/api/gemini/transcript", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+
+  const json = (await parseJson<TranscriptResponseBody & { error?: string }>(response)) as TranscriptResponseBody & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(json.error || "Transcript generation failed");
+  }
+
+  if (!json.transcript || !Array.isArray(json.transcript.segments)) {
+    throw new Error("Transcript response malformed");
+  }
+
+  return json;
+}
+
+export async function requestKeyframeSuggestions(
+  payload: KeyframeRequestBody,
+): Promise<KeyframeResponseBody> {
+  const response = await fetch("/api/gemini/keyframes", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+
+  const json = (await parseJson<KeyframeResponseBody & { error?: string }>(response)) as KeyframeResponseBody & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(json.error || "Keyframe suggestion failed");
+  }
+
+  if (!Array.isArray(json.suggestions)) {
+    throw new Error("Keyframe response malformed");
+  }
+
+  return json;
+}
 
 export async function exportStructuredPdf(body: ExportRequestBody): Promise<ExportPdfResult> {
   const response = await fetch("/api/gemini/export", {

@@ -7,6 +7,28 @@ export type Shot = {
   dataUrl: string; // local preview
   label?: string;
   note?: string;
+  transcriptSegmentId?: string;
+  transcriptSnippet?: string;
+  origin?: "manual" | "suggested";
+};
+
+export type TranscriptSegment = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  text: string;
+  speaker?: string;
+};
+
+export type TranscriptSource = "uploaded" | "generated";
+
+export type TranscriptTrack = {
+  id: string;
+  segments: TranscriptSegment[];
+  source: TranscriptSource;
+  language?: string;
+  createdAt: number;
+  fileName?: string;
 };
 
 export type SchemaType = "tutorial" | "meetingSummary";

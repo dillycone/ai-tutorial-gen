@@ -14,13 +14,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Eye, Trash2, ArrowLeft, ArrowRight, Clock } from "lucide-react";
+import { Eye, Trash2, ArrowLeft, ArrowRight, Clock, MessageSquareText } from "lucide-react";
 
 type ScreenshotCardProps = {
   shot: Shot;
   index: number;
   total: number;
   isLatest: boolean;
+  isSearchMatch: boolean;
+  searchTerm: string;
   flash: boolean;
   onPreview: (id: string) => void;
   onRemove: (id: string) => void;
@@ -33,6 +35,8 @@ function ScreenshotCardInner({
   index,
   total,
   isLatest,
+  isSearchMatch,
+  searchTerm,
   flash,
   onPreview,
   onRemove,
@@ -47,7 +51,8 @@ function ScreenshotCardInner({
             "group h-full overflow-hidden border-gray-200 bg-white shadow-sm shadow-gray-100 transition-all duration-300 hover:translate-y-[-4px] hover:shadow-lg hover:shadow-gray-200 hover:border-gray-300",
             "animate-in fade-in-0 zoom-in-95 duration-300",
             flash && "ring-2 ring-emerald-500/70 animate-pulse",
-            isLatest && "ring-1 ring-blue-500/50 shadow-blue-100"
+            isLatest && "ring-1 ring-blue-500/50 shadow-blue-100",
+            isSearchMatch && "ring-2 ring-sky-400 shadow-sky-100"
           )}
         >
           <div className="relative overflow-hidden">
@@ -96,6 +101,11 @@ function ScreenshotCardInner({
               {isLatest && (
                 <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300">
                   Latest
+                </Badge>
+              )}
+              {shot.origin === "suggested" && (
+                <Badge className="bg-sky-100 text-sky-800 border-sky-300">
+                  Suggested
                 </Badge>
               )}
             </div>
@@ -201,6 +211,23 @@ function ScreenshotCardInner({
               </div>
             </div>
 
+            {shot.transcriptSnippet ? (
+              <div className="space-y-2">
+                <Label className="text-xs text-gray-600 font-medium flex items-center gap-1">
+                  <MessageSquareText className="h-3 w-3" />
+                  Transcript
+                </Label>
+                <div
+                  className={cn(
+                    "rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm leading-relaxed text-gray-700",
+                    isSearchMatch && "border-sky-400 bg-sky-50 shadow-sm shadow-sky-200"
+                  )}
+                >
+                  {renderHighlightedSnippet(shot.transcriptSnippet, searchTerm)}
+                </div>
+              </div>
+            ) : null}
+
             <div className="space-y-2">
               <Label htmlFor={`notes-${shot.id}`} className="text-xs text-gray-600 font-medium">
                 Notes
@@ -257,9 +284,14 @@ function areEqual(prev: ScreenshotCardProps, next: ScreenshotCardProps) {
     a.label === b.label &&
     a.note === b.note &&
     a.dataUrl === b.dataUrl &&
+    a.transcriptSnippet === b.transcriptSnippet &&
+    a.transcriptSegmentId === b.transcriptSegmentId &&
+    a.origin === b.origin &&
     prev.index === next.index &&
     prev.total === next.total &&
     prev.isLatest === next.isLatest &&
+    prev.isSearchMatch === next.isSearchMatch &&
+    prev.searchTerm === next.searchTerm &&
     prev.flash === next.flash &&
     prev.onPreview === next.onPreview &&
     prev.onRemove === next.onRemove &&
@@ -292,4 +324,28 @@ function handleTimecodeChange({
   }
 
   onUpdate(shot.id, updates);
+}
+
+function renderHighlightedSnippet(text: string, query: string) {
+  const normalized = query.trim();
+  if (!normalized) return text;
+  try {
+    const regex = new RegExp(`(${escapeRegExp(normalized)})`, "ig");
+    const parts = text.split(regex);
+    return parts.map((part, index) =>
+      index % 2 === 1 ? (
+        <mark key={index} className="rounded bg-amber-200 px-0.5">
+          {part}
+        </mark>
+      ) : (
+        <span key={index}>{part}</span>
+      ),
+    );
+  } catch {
+    return text;
+  }
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

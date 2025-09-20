@@ -272,7 +272,27 @@ export async function generateStructuredOutput(body: GenerateRequestBody): Promi
     }
   }
 
-  const screenshotList = screenshots.map((s) => `${s.id} -> ${s.timecode}`).join("\n") || "(none)";
+  const screenshotList = (() => {
+    if (shotsMeta.length > 0) {
+      return shotsMeta
+        .map((shot) => {
+          const parts: string[] = [];
+          parts.push(`${shot.id} @ ${shot.timecode ?? "??"}`);
+          if (shot.label) parts.push(`label: ${shot.label}`);
+          if (shot.note) parts.push(`note: ${shot.note}`);
+          if (shot.transcriptSnippet) {
+            const snippet = shot.transcriptSnippet.length > 180
+              ? `${shot.transcriptSnippet.slice(0, 177)}…`
+              : shot.transcriptSnippet;
+            parts.push(`transcript: ${snippet}`);
+          }
+          if (shot.origin) parts.push(`origin: ${shot.origin}`);
+          return parts.join(" | ");
+        })
+        .join("\n");
+    }
+    return screenshots.map((s) => `${s.id} -> ${s.timecode}`).join("\n");
+  })() || "(none)";
   const parts = [
     createPartFromUri(video.uri, video.mimeType),
     "\n\n",

@@ -8,6 +8,7 @@ import WorkflowSteps from "./workbench/WorkflowSteps";
 import UploadSection from "./workbench/UploadSection";
 import ScreenshotSection from "./workbench/ScreenshotSection";
 import OptionsSection from "./workbench/OptionsSection";
+import TranscriptSection from "./workbench/TranscriptSection";
 import { useVideoWorkbench } from "@/hooks/useVideoWorkbench";
 import type { ToastState } from "@/hooks/useVideoWorkbench";
 
@@ -66,8 +67,15 @@ export default function VideoWorkbench() {
     shots,
     latestShotId,
     flashShotId,
+    transcriptTrack,
+    transcriptStatus,
+    transcriptError,
+    transcriptSearchTerm,
+    transcriptMatches,
+    transcriptMatchedShotIds,
     setPreviewShotId,
     previewShot,
+    suggestingKeyframes,
     toast,
     steps,
     enforceSchema,
@@ -86,6 +94,12 @@ export default function VideoWorkbench() {
     exportOptions,
     setExportOptions,
     readyToGenerate,
+    handleTranscriptFile,
+    handleGenerateTranscript,
+    handleClearTranscript,
+    handleTranscriptSearch,
+    handleTranscriptSegmentFocus,
+    handleSuggestKeyframes,
     handleGenerate,
     resultText,
     resultTab,
@@ -142,14 +156,33 @@ export default function VideoWorkbench() {
         onTimeUpdate={handleTimeUpdate}
       />
 
+      <TranscriptSection
+        transcript={transcriptTrack}
+        status={transcriptStatus}
+        error={transcriptError}
+        searchTerm={transcriptSearchTerm}
+        matches={transcriptMatches}
+        onUpload={handleTranscriptFile}
+        onGenerate={handleGenerateTranscript}
+        onClear={handleClearTranscript}
+        onSearch={handleTranscriptSearch}
+        onFocusSegment={handleTranscriptSegmentFocus}
+        canGenerate={Boolean(videoOnGemini)}
+      />
+
       <ScreenshotSection
         shots={shots}
         latestShotId={latestShotId}
         flashShotId={flashShotId}
+        transcriptSearchTerm={transcriptSearchTerm}
+        transcriptMatchedShotIds={transcriptMatchedShotIds}
         onPreview={handlePreview}
         onRemove={handleRemoveShot}
         onMove={handleMoveShot}
         onUpdate={handleUpdateShot}
+        onSuggestKeyframes={handleSuggestKeyframes}
+        suggestingKeyframes={suggestingKeyframes}
+        canSuggestKeyframes={Boolean(videoOnGemini && videoUrl)}
       />
 
       <OptionsSection

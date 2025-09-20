@@ -1,8 +1,25 @@
 /* lib/types/api.ts */
-import type { SchemaType, PromptMode } from "@/lib/types";
+import type { SchemaType, PromptMode, TranscriptSource } from "@/lib/types";
 
 export type VideoRef = { uri: string; mimeType: string };
 export type ImgRef = { id: string; uri: string; mimeType: string; timecode: string };
+
+export type TranscriptSegmentPayload = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  text: string;
+  speaker?: string;
+};
+
+export type TranscriptPayload = {
+  id?: string;
+  segments: TranscriptSegmentPayload[];
+  source: TranscriptSource;
+  language?: string;
+  fileName?: string;
+  createdAt?: number;
+};
 
 export type GenerateRequestBody = {
   video: VideoRef;
@@ -11,7 +28,17 @@ export type GenerateRequestBody = {
   titleHint?: string;
   schemaType?: SchemaType;
   promptMode?: PromptMode;
-  shots?: Array<{ id: string; timecode?: string; label?: string; note?: string }>;
+  shots?: Array<{
+    id: string;
+    timecode?: string;
+    timeSec?: number;
+    label?: string;
+    note?: string;
+    transcriptSegmentId?: string;
+    transcriptSnippet?: string;
+    origin?: "manual" | "suggested";
+  }>;
+  transcript?: TranscriptPayload;
   dspyOptions?: Partial<Record<string, unknown>> & {
     auto?: "light" | "medium" | "heavy" | null;
     maxMetricCalls?: number | null;
@@ -46,6 +73,31 @@ export type GenerateRequestBody = {
     earlyStopStreak?: number;
   };
   promoteBaseline?: boolean;
+};
+
+export type TranscriptRequestBody = {
+  video: VideoRef;
+  language?: string;
+};
+
+export type TranscriptResponseBody = {
+  transcript: TranscriptPayload;
+};
+
+export type KeyframeSuggestionPayload = {
+  timeSec: number;
+  timecode?: string;
+  description?: string;
+  confidence?: number;
+};
+
+export type KeyframeRequestBody = {
+  video: VideoRef;
+  maxSuggestions?: number;
+};
+
+export type KeyframeResponseBody = {
+  suggestions: KeyframeSuggestionPayload[];
 };
 
 export type ExportShotIn = {

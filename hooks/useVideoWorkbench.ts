@@ -3,7 +3,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatFileSize, toTimecode } from "@/lib/format";
-import { PromptMode, PromptOptimizationMeta, SchemaType, Shot } from "@/lib/types";
+import {
+  PromptMode,
+  PromptOptimizationMeta,
+  SchemaType,
+  Shot,
+  TranscriptTrack,
+  TranscriptSegment,
+} from "@/lib/types";
 import type { ExportRequestBody, GenerateRequestBody } from "@/lib/types/api";
 import type { GeminiFileRef } from "@/lib/geminiUploads";
 import { useShotManager } from "@/hooks/useShotManager";
@@ -13,9 +20,17 @@ import {
   generateStructuredOutput,
   uploadScreenshotBatch,
   uploadVideoViaApi,
+  generateTranscriptFromVideo,
+  requestKeyframeSuggestions,
 } from "@/lib/services/workbenchApi";
+import {
+  parseTranscriptFile,
+  buildTranscriptSearchIndex,
+  searchTranscriptSegments,
+  findTranscriptSegment,
+} from "@/lib/transcript";
 
-export type BusyPhase = "upload" | "generate" | "export";
+export type BusyPhase = "upload" | "generate" | "export" | "suggest";
 
 type VideoMetadata = {
   duration: number;
@@ -56,6 +71,24 @@ export type ExportOptionsState = {
 };
 
 
+const MAX_TRANSCRIPT_SEGMENTS = 400;
+const TRANSCRIPT_SNIPPET_LIMIT = 240;
+const SUGGESTION_DEDUPE_TOLERANCE = 0.5;
+const TIMECODE_PATTERN = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+function parseTimecodeToSeconds(timecode?: string | null): number | null {
+  if (!timecode) return null;
+  const match = timecode.trim().match(TIMECODE_PATTERN);
+  if (!match) return null;
+  const hours = match[3] ? Number(match[1]) : 0;
+  const minutes = match[3] ? Number(match[2]) : Number(match[1]);
+  const seconds = match[3] ? Number(match[3]) : Number(match[2]);
+  if ([hours, minutes, seconds].some((value) => Number.isNaN(value))) {
+    return null;
+  }
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 export type UseVideoWorkbenchReturn = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -66,7 +99,14 @@ export type UseVideoWorkbenchReturn = {
   shots: Shot[];
   latestShotId: string | null;
   flashShotId: string | null;
+  transcriptTrack: TranscriptTrack | null;
+  transcriptStatus: "idle" | "uploading" | "generating";
+  transcriptError: string | null;
+  transcriptSearchTerm: string;
+  transcriptMatches: TranscriptSegment[];
+  transcriptMatchedShotIds: Set<string>;
   busyPhase: BusyPhase | null;
+  suggestingKeyframes: boolean;
   busy: boolean;
   dragActive: boolean;
   steps: WorkbenchStep[];
@@ -112,6 +152,13 @@ export type UseVideoWorkbenchReturn = {
   handleRemoveShot: (id: string) => void;
   handleUpdateShot: (id: string, changes: Partial<Shot>) => void;
   handleMoveShot: (id: string, direction: "left" | "right") => void;
+  handleTranscriptFile: (file: File) => Promise<void>;
+  handleGenerateTranscript: (options?: { language?: string }) => Promise<void>;
+  handleClearTranscript: () => void;
+  handleTranscriptSearch: (query: string) => void;
+  handleTranscriptSegmentFocus: (segmentId: string) => void;
+  handleSeekToTime: (timeSec: number) => void;
+  handleSuggestKeyframes: () => Promise<void>;
   handleGenerate: () => Promise<void>;
   handleExportPdf: () => Promise<void>;
 };
@@ -131,6 +178,11 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
 
   const [dragActive, setDragActive] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+
+  const [transcriptTrack, setTranscriptTrack] = useState<TranscriptTrack | null>(null);
+  const [transcriptStatus, setTranscriptStatus] = useState<"idle" | "uploading" | "generating">("idle");
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcriptSearchTerm, setTranscriptSearchTerm] = useState("");
 
   const [enforceSchema, setEnforceSchema] = useState(true);
   const [schemaType, setSchemaType] = useState<SchemaType>("tutorial");
@@ -173,16 +225,66 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setToast({ id: Date.now(), type, message });
   }, []);
 
+  const transcriptSegments = useMemo(
+    () => (transcriptTrack ? transcriptTrack.segments ?? [] : []),
+    [transcriptTrack],
+  );
+
+  const transcriptSearchIndex = useMemo(
+    () => (transcriptSegments.length > 0 ? buildTranscriptSearchIndex(transcriptSegments) : []),
+    [transcriptSegments],
+  );
+
+  const transcriptById = useMemo(() => {
+    if (transcriptSegments.length === 0) return new Map<string, TranscriptSegment>();
+    return new Map(transcriptSegments.map((segment) => [segment.id, segment]));
+  }, [transcriptSegments]);
+
+  const deriveShotMetadata = useCallback(
+    (shot: Shot): Partial<Shot> | null => {
+      if (transcriptSegments.length === 0) {
+        if (shot.transcriptSegmentId || shot.transcriptSnippet) {
+          return { transcriptSegmentId: undefined, transcriptSnippet: undefined };
+        }
+        return null;
+      }
+      const baseTimeCandidate = Number.isFinite(shot.timeSec) ? shot.timeSec : parseTimecodeToSeconds(shot.timecode);
+      if (typeof baseTimeCandidate !== "number" || !Number.isFinite(baseTimeCandidate)) {
+        if (shot.transcriptSegmentId || shot.transcriptSnippet) {
+          return { transcriptSegmentId: undefined, transcriptSnippet: undefined };
+        }
+        return null;
+      }
+      const segment = findTranscriptSegment(transcriptSegments, baseTimeCandidate);
+      if (!segment) {
+        if (shot.transcriptSegmentId || shot.transcriptSnippet) {
+          return { transcriptSegmentId: undefined, transcriptSnippet: undefined };
+        }
+        return null;
+      }
+      const snippet = segment.text.length > TRANSCRIPT_SNIPPET_LIMIT
+        ? `${segment.text.slice(0, TRANSCRIPT_SNIPPET_LIMIT - 1)}…`
+        : segment.text;
+      if (shot.transcriptSegmentId === segment.id && shot.transcriptSnippet === snippet) {
+        return null;
+      }
+      return { transcriptSegmentId: segment.id, transcriptSnippet: snippet };
+    },
+    [transcriptSegments],
+  );
+
   const {
     shots,
     latestShotId,
     flashShotId,
     captureShot,
+    addShots,
     removeShot,
     updateShot,
     moveShot,
     resetShots,
-  } = useShotManager({ videoRef, videoUrl, notify: showToast });
+    refreshMetadata,
+  } = useShotManager({ videoRef, videoUrl, notify: showToast, deriveShotMetadata });
 
   const setPromptMode = useCallback(
     (mode: PromptMode) => {
@@ -197,6 +299,28 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     const timeout = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    refreshMetadata();
+  }, [refreshMetadata, transcriptSegments]);
+
+  const transcriptMatches = useMemo(() => {
+    if (!transcriptSearchTerm.trim()) return [] as TranscriptSegment[];
+    const results = searchTranscriptSegments(transcriptSearchIndex, transcriptSearchTerm);
+    return results.slice(0, 50);
+  }, [transcriptSearchIndex, transcriptSearchTerm]);
+
+  const transcriptMatchedShotIds = useMemo(() => {
+    const term = transcriptSearchTerm.trim().toLowerCase();
+    if (!term) return new Set<string>();
+    const ids = new Set<string>();
+    for (const shot of shots) {
+      if (shot.transcriptSnippet && shot.transcriptSnippet.toLowerCase().includes(term)) {
+        ids.add(shot.id);
+      }
+    }
+    return ids;
+  }, [shots, transcriptSearchTerm]);
 
 
   useEffect(() => {
@@ -266,6 +390,10 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setVideoMetadata(null);
     setVideoOnGemini(null);
     resetShots();
+    setTranscriptTrack(null);
+    setTranscriptStatus("idle");
+    setTranscriptError(null);
+    setTranscriptSearchTerm("");
     setResultText(null);
     setResultTab("formatted");
     setPromptMeta(null);
@@ -344,6 +472,303 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     }
   }, [busyPhase, showToast, videoFile]);
 
+  const handleTranscriptFile = useCallback(
+    async (file: File) => {
+      if (!file) return;
+      setTranscriptStatus("uploading");
+      setTranscriptError(null);
+      try {
+        const { track } = await parseTranscriptFile(file, {
+          source: "uploaded",
+          fileName: file.name,
+        });
+        if (!track.segments.length) {
+          throw new Error("Transcript file did not include any timestamped captions");
+        }
+        const limitedSegments = track.segments.slice(0, MAX_TRANSCRIPT_SEGMENTS).map((segment, index) => ({
+          ...segment,
+          id: segment.id || `seg-${index + 1}`,
+        }));
+        const normalized: TranscriptTrack = {
+          id: track.id,
+          source: track.source,
+          language: track.language,
+          fileName: track.fileName,
+          createdAt: Date.now(),
+          segments: limitedSegments,
+        };
+        setTranscriptTrack(normalized);
+        setTranscriptSearchTerm("");
+        setTranscriptError(null);
+        showToast("success", `Loaded transcript (${limitedSegments.length} segments)`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to parse transcript";
+        setTranscriptError(message);
+        showToast("error", message);
+      } finally {
+        setTranscriptStatus("idle");
+      }
+    },
+    [showToast],
+  );
+
+  const handleGenerateTranscript = useCallback(
+    async (options?: { language?: string }) => {
+      if (!videoOnGemini) {
+        showToast("error", "Upload the video to Gemini before generating a transcript.");
+        return;
+      }
+      setTranscriptStatus("generating");
+      setTranscriptError(null);
+      try {
+        const response = await generateTranscriptFromVideo({
+          video: { uri: videoOnGemini.uri, mimeType: videoOnGemini.mimeType },
+          language: options?.language,
+        });
+        const payload = response.transcript;
+        if (!payload) {
+          throw new Error("Transcript generation did not return a transcript payload");
+        }
+        const segments = payload.segments.slice(0, MAX_TRANSCRIPT_SEGMENTS);
+        if (segments.length === 0) {
+          throw new Error("Transcript generation returned no segments");
+        }
+        const normalized: TranscriptTrack = {
+          id: payload.id ?? `transcript-${Date.now()}`,
+          source: payload.source ?? "generated",
+          language: payload.language,
+          fileName: payload.fileName,
+          createdAt: payload.createdAt ?? Date.now(),
+          segments: segments.map((segment, index) => ({
+            ...segment,
+            id: segment.id || `seg-${index + 1}`,
+          })),
+        };
+        setTranscriptTrack(normalized);
+        setTranscriptSearchTerm("");
+        setTranscriptError(null);
+        showToast("success", `Generated transcript (${segments.length} segments)`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to generate transcript";
+        setTranscriptError(message);
+        showToast("error", message);
+      } finally {
+        setTranscriptStatus("idle");
+      }
+    },
+    [showToast, videoOnGemini],
+  );
+
+  const handleClearTranscript = useCallback(() => {
+    setTranscriptTrack(null);
+    setTranscriptStatus("idle");
+    setTranscriptError(null);
+    setTranscriptSearchTerm("");
+    showToast("info", "Transcript cleared");
+  }, [showToast]);
+
+  const handleTranscriptSearch = useCallback((query: string) => {
+    setTranscriptSearchTerm(query);
+  }, []);
+
+  const handleTranscriptSegmentFocus = useCallback(
+    (segmentId: string) => {
+      const segment = transcriptById.get(segmentId);
+      if (!segment) return;
+      handleSeekToTime(segment.startSec);
+
+      let candidate = shots.find((shot) => shot.transcriptSegmentId === segmentId) ?? null;
+      if (!candidate && shots.length > 0) {
+        let bestShot: Shot | null = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (const shot of shots) {
+          const timeCandidate = Number.isFinite(shot.timeSec)
+            ? shot.timeSec
+            : parseTimecodeToSeconds(shot.timecode);
+          if (typeof timeCandidate !== "number" || !Number.isFinite(timeCandidate)) {
+            continue;
+          }
+          const distance = Math.abs(timeCandidate - segment.startSec);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestShot = shot;
+          }
+        }
+        candidate = bestShot;
+      }
+      if (candidate) {
+        setPreviewShotId(candidate.id);
+      }
+    },
+    [handleSeekToTime, transcriptById, shots, setPreviewShotId],
+  );
+
+  const handleSuggestKeyframes = useCallback(async () => {
+    if (!videoOnGemini) {
+      showToast("error", "Upload the video to Gemini before suggesting key frames.");
+      return;
+    }
+    const video = videoRef.current;
+    if (!video || !videoUrl) {
+      showToast("error", "Load the video before suggesting key frames.");
+      return;
+    }
+    if (busy || busyPhase === "suggest") {
+      showToast("info", "Please wait for the current operation to finish.");
+      return;
+    }
+    if (!Number.isFinite(video.duration) || video.duration <= 0 || video.readyState < 2) {
+      showToast("error", "Wait for the video to finish loading before requesting key frames.");
+      return;
+    }
+
+    setBusyPhase("suggest");
+    showToast("info", "Analyzing video for key frames…");
+
+    const clampTime = (value: number) => {
+      const duration = Number.isFinite(video.duration) ? video.duration : value;
+      return Math.min(Math.max(0, value), Math.max(0, duration - 0.05));
+    };
+
+    const seekTo = (target: number) =>
+      new Promise<number>((resolve, reject) => {
+        const safeTarget = clampTime(target);
+        if (Math.abs(video.currentTime - safeTarget) < 0.05) {
+          resolve(video.currentTime);
+          return;
+        }
+        const handleSeeked = () => {
+          cleanup();
+          resolve(video.currentTime);
+        };
+        const handleError = () => {
+          cleanup();
+          reject(new Error("Video seek failed"));
+        };
+        const cleanup = () => {
+          video.removeEventListener("seeked", handleSeeked);
+          video.removeEventListener("error", handleError);
+        };
+        video.addEventListener("seeked", handleSeeked, { once: true });
+        video.addEventListener("error", handleError, { once: true });
+        try {
+          video.currentTime = safeTarget;
+        } catch (error) {
+          cleanup();
+          reject(error instanceof Error ? error : new Error("Unable to seek"));
+        }
+      });
+
+    const captureFrames = async (suggestions: Array<{ timeSec: number; description?: string }>) => {
+      const results: Array<{ timeSec: number; dataUrl: string; description?: string }> = [];
+      if (suggestions.length === 0) return results;
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        throw new Error("Unable to capture frames from video");
+      }
+      const ensureCanvasSize = () => {
+        const width = video.videoWidth || 1280;
+        const height = video.videoHeight || 720;
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+      };
+
+      const originalTime = video.currentTime;
+      const wasPlaying = !video.paused;
+      if (wasPlaying) {
+        video.pause();
+      }
+
+      try {
+        for (const suggestion of suggestions) {
+          const actual = await seekTo(suggestion.timeSec);
+          ensureCanvasSize();
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL("image/png");
+          results.push({ timeSec: actual, dataUrl, description: suggestion.description });
+        }
+      } finally {
+        try {
+          await seekTo(originalTime);
+        } catch {
+          // ignore restore failures
+        }
+        if (wasPlaying) {
+          void video.play().catch(() => {});
+        }
+      }
+
+      return results;
+    };
+
+    try {
+      const { suggestions = [] } = await requestKeyframeSuggestions({
+        video: { uri: videoOnGemini.uri, mimeType: videoOnGemini.mimeType },
+        maxSuggestions: 8,
+      });
+
+      const normalized = suggestions
+        .map((suggestion, index) => {
+          const direct = Number(suggestion.timeSec);
+          const parsedTime = Number.isFinite(direct) ? direct : parseTimecodeToSeconds(suggestion.timecode);
+          if (typeof parsedTime !== "number" || !Number.isFinite(parsedTime) || parsedTime < 0) {
+            return null;
+          }
+          return {
+            timeSec: clampTime(parsedTime),
+            description: suggestion.description?.trim() || `Suggested frame ${index + 1}`,
+          };
+        })
+        .filter((item): item is { timeSec: number; description: string } => Boolean(item));
+
+      if (normalized.length === 0) {
+        showToast("info", "No key frames detected. Try capturing manually.");
+        return;
+      }
+
+      const dedupeKeys = new Set<string>();
+      const deduped: Array<{ timeSec: number; description: string }> = [];
+      const keyFor = (timeSec: number) => Math.round(timeSec / SUGGESTION_DEDUPE_TOLERANCE).toString();
+      for (const item of normalized.sort((a, b) => a.timeSec - b.timeSec)) {
+        const key = keyFor(item.timeSec);
+        if (dedupeKeys.has(key)) continue;
+        dedupeKeys.add(key);
+        deduped.push(item);
+      }
+
+      const captures = await captureFrames(deduped);
+      if (captures.length === 0) {
+        showToast("info", "Unable to capture the suggested frames.");
+        return;
+      }
+
+      const created = addShots(
+        captures.map((capture) => ({
+          timeSec: capture.timeSec,
+          dataUrl: capture.dataUrl,
+          label: capture.description,
+          note: capture.description,
+          origin: "suggested",
+        })),
+      );
+
+      if (created.length > 0) {
+        const summary = created.length === 1 ? "Added 1 suggested frame" : `Added ${created.length} suggested frames`;
+        showToast("success", summary);
+      } else {
+        showToast("info", "Suggested frames were already part of your shot list.");
+      }
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Failed to suggest key frames");
+    } finally {
+      setBusyPhase(null);
+    }
+  }, [addShots, busy, busyPhase, showToast, videoOnGemini, videoRef, videoUrl]);
+
   const handleGenerate = useCallback(async () => {
     if (!videoOnGemini) {
       showToast("error", "Upload the video to Gemini first.");
@@ -409,7 +834,34 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
         titleHint,
         schemaType,
         promptMode: promptModeState,
-        shots: shots.map(({ id, timecode, label, note }) => ({ id, timecode, label, note })),
+        shots: shots.map(
+          ({ id, timecode, timeSec, label, note, transcriptSegmentId, transcriptSnippet, origin }) => ({
+            id,
+            timecode,
+            timeSec,
+            label,
+            note,
+            transcriptSegmentId,
+            transcriptSnippet,
+            origin,
+          }),
+        ),
+        transcript: transcriptTrack
+          ? {
+              id: transcriptTrack.id,
+              source: transcriptTrack.source,
+              language: transcriptTrack.language,
+              fileName: transcriptTrack.fileName,
+              createdAt: transcriptTrack.createdAt,
+              segments: transcriptTrack.segments.slice(0, MAX_TRANSCRIPT_SEGMENTS).map(({
+                id,
+                startSec,
+                endSec,
+                text,
+                speaker,
+              }) => ({ id, startSec, endSec, text, speaker })),
+            }
+          : undefined,
         dspyOptions,
         promoteBaseline: promptModeState === "dspy" ? promoteBaseline : false,
       };
@@ -439,6 +891,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     shots,
     showToast,
     titleHint,
+    transcriptTrack,
     videoOnGemini,
     jsonBonus,
   ]);
@@ -458,6 +911,16 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     if (!video) return;
     setCurrentTime(video.currentTime);
   }, []);
+
+  const handleSeekToTime = useCallback(
+    (timeSec: number) => {
+      if (!Number.isFinite(timeSec)) return;
+      const video = videoRef.current;
+      if (!video) return;
+      video.currentTime = Math.max(0, timeSec);
+    },
+    [videoRef],
+  );
 
   const handleExportPdf = useCallback(async () => {
     if (!resultText) {
@@ -535,6 +998,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     }
   }, [enforceSchema, resultText, schemaType, shots, showToast, exportOptions]);
 
+  const suggestingKeyframes = busyPhase === "suggest";
   const readyToGenerate = Boolean(videoOnGemini) && shots.length > 0 && !busy;
 
   const previewShot = previewShotId ? shots.find((shot) => shot.id === previewShotId) ?? null : null;
@@ -552,8 +1016,15 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     shots,
     latestShotId,
     flashShotId,
+    transcriptTrack,
+    transcriptStatus,
+    transcriptError,
+    transcriptSearchTerm,
+    transcriptMatches,
+    transcriptMatchedShotIds,
     busyPhase,
     busy,
+    suggestingKeyframes,
     dragActive,
     steps,
     toast,
@@ -598,6 +1069,13 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     handleRemoveShot: removeShot,
     handleUpdateShot: updateShot,
     handleMoveShot: moveShot,
+    handleTranscriptFile,
+    handleGenerateTranscript,
+    handleClearTranscript,
+    handleTranscriptSearch,
+    handleTranscriptSegmentFocus,
+    handleSeekToTime,
+    handleSuggestKeyframes,
     handleGenerate,
     handleExportPdf,
   };

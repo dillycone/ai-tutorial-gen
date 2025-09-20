@@ -15,8 +15,12 @@ import type {
   ExportOptions,
   ExportDocumentOptions,
   ExportImageOptions,
+  TranscriptPayload,
+  TranscriptRequestBody,
+  KeyframeRequestBody,
 } from "@/lib/types/api";
-import type { SchemaType, PromptMode } from "@/lib/types";
+import type { TranscriptSegmentPayload } from "@/lib/types/api";
+import type { SchemaType, PromptMode, TranscriptSource } from "@/lib/types";
 
 function isSchemaType(v: unknown): v is SchemaType {
   return v === "tutorial" || v === "meetingSummary";
@@ -60,6 +64,69 @@ export function requireFileFromForm(form: FormData): File {
   return file;
 }
 
+function isTranscriptSource(value: unknown): value is TranscriptSource {
+  return value === "uploaded" || value === "generated";
+}
+
+function parseTranscriptSegments(value: unknown): TranscriptSegmentPayload[] {
+  if (!Array.isArray(value)) {
+    throw new ValidationError("Transcript segments must be an array");
+  }
+  return value.map((segment, index) => {
+    if (!segment || typeof segment !== "object") {
+      throw new ValidationError(`Transcript segment ${index + 1} is invalid`);
+    }
+    const s = segment as Record<string, unknown>;
+    const id = typeof s.id === "string" && s.id.trim() ? s.id.trim() : `seg-${index + 1}`;
+    const startSec = Number(s.startSec);
+    const endSec = Number(s.endSec);
+    const text = typeof s.text === "string" ? s.text.trim() : "";
+    const speaker = typeof s.speaker === "string" && s.speaker.trim() ? s.speaker.trim() : undefined;
+
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) {
+      throw new ValidationError(`Transcript segment ${index + 1} has invalid timestamps`);
+    }
+    if (startSec < 0 || endSec < 0 || endSec < startSec) {
+      throw new ValidationError(`Transcript segment ${index + 1} has inconsistent timestamps`);
+    }
+    if (!text) {
+      throw new ValidationError(`Transcript segment ${index + 1} is missing text`);
+    }
+
+    return { id, startSec, endSec, text, speaker };
+  });
+}
+
+function parseTranscriptPayload(value: unknown, allowUndefined = true): TranscriptPayload | undefined {
+  if (value == null) {
+    if (allowUndefined) return undefined;
+    throw new ValidationError("Transcript payload missing");
+  }
+  if (typeof value !== "object") {
+    throw new ValidationError("Transcript payload must be an object");
+  }
+  const payload = value as Record<string, unknown>;
+  const source = payload.source;
+  if (!isTranscriptSource(source)) {
+    throw new ValidationError("Transcript payload missing valid source");
+  }
+  const segments = parseTranscriptSegments(payload.segments);
+  const language = typeof payload.language === "string" ? payload.language : undefined;
+  const fileName = typeof payload.fileName === "string" ? payload.fileName : undefined;
+  const id = typeof payload.id === "string" ? payload.id : undefined;
+  const createdAt = Number(payload.createdAt);
+  const sanitizedCreatedAt = Number.isFinite(createdAt) ? createdAt : Date.now();
+
+  return {
+    id,
+    source,
+    segments,
+    language,
+    fileName,
+    createdAt: sanitizedCreatedAt,
+  };
+}
+
 export function parseGenerateRequest(body: unknown): GenerateRequestBody {
   if (!body || typeof body !== "object") {
     throw new ValidationError("Invalid request body");
@@ -91,11 +158,43 @@ export function parseGenerateRequest(body: unknown): GenerateRequestBody {
   const titleHint = typeof b.titleHint === "string" ? b.titleHint : undefined;
   const schemaType = isSchemaType(b.schemaType) ? b.schemaType : (undefined as unknown as SchemaType | undefined);
   const promptMode = isPromptMode(b.promptMode) ? b.promptMode : (undefined as unknown as PromptMode | undefined);
-  const shots = Array.isArray(b.shots) ? b.shots : undefined;
+  let shots: GenerateRequestBody["shots"];
+  if (Array.isArray(b.shots)) {
+    shots = b.shots.map((shot, index) => {
+      if (!shot || typeof shot !== "object") {
+        throw new ValidationError(`Invalid shot entry at index ${index}`);
+      }
+      const s = shot as Record<string, unknown>;
+      if (typeof s.id !== "string" || !s.id) {
+        throw new ValidationError(`Shot ${index + 1} is missing an id`);
+      }
+      const timecode = typeof s.timecode === "string" ? s.timecode : undefined;
+      const timeSec = typeof s.timeSec === "number" && Number.isFinite(s.timeSec) ? s.timeSec : undefined;
+      const label = typeof s.label === "string" ? s.label : undefined;
+      const note = typeof s.note === "string" ? s.note : undefined;
+      const transcriptSegmentId = typeof s.transcriptSegmentId === "string" ? s.transcriptSegmentId : undefined;
+      const transcriptSnippet = typeof s.transcriptSnippet === "string" ? s.transcriptSnippet : undefined;
+      const origin = s.origin === "manual" || s.origin === "suggested" ? s.origin : undefined;
+
+      return { id: s.id, timecode, timeSec, label, note, transcriptSegmentId, transcriptSnippet, origin };
+    });
+  }
+  const transcript = parseTranscriptPayload(b.transcript);
   const dspyOptions = b.dspyOptions && typeof b.dspyOptions === "object" ? (b.dspyOptions as GenerateRequestBody["dspyOptions"]) : undefined;
   const promoteBaseline = Boolean(b.promoteBaseline);
 
-  return { video, screenshots, enforceSchema, titleHint, schemaType, promptMode, shots, dspyOptions, promoteBaseline };
+  return {
+    video,
+    screenshots,
+    enforceSchema,
+    titleHint,
+    schemaType,
+    promptMode,
+    shots,
+    transcript,
+    dspyOptions,
+    promoteBaseline,
+  };
 }
 
 export function parseExportRequest(body: unknown): ExportRequestBody {
@@ -183,6 +282,44 @@ export function parseExportRequest(body: unknown): ExportRequestBody {
     resultText: b.resultText,
     shots,
     options,
+  };
+}
+
+export function parseTranscriptRequest(body: unknown): TranscriptRequestBody {
+  if (!body || typeof body !== "object") {
+    throw new ValidationError("Invalid transcript payload");
+  }
+  const b = body as Record<string, unknown>;
+  const video = b.video;
+  if (!video || typeof video !== "object") {
+    throw new ValidationError("Transcript request missing video reference");
+  }
+  const ref = video as Record<string, unknown>;
+  if (typeof ref.uri !== "string" || typeof ref.mimeType !== "string") {
+    throw new ValidationError("Transcript request video reference invalid");
+  }
+  const language = typeof b.language === "string" ? b.language : undefined;
+  return { video: { uri: ref.uri, mimeType: ref.mimeType }, language };
+}
+
+export function parseKeyframeRequest(body: unknown): KeyframeRequestBody {
+  if (!body || typeof body !== "object") {
+    throw new ValidationError("Invalid keyframe payload");
+  }
+  const b = body as Record<string, unknown>;
+  const video = b.video;
+  if (!video || typeof video !== "object") {
+    throw new ValidationError("Keyframe request missing video reference");
+  }
+  const ref = video as Record<string, unknown>;
+  if (typeof ref.uri !== "string" || typeof ref.mimeType !== "string") {
+    throw new ValidationError("Keyframe request video reference invalid");
+  }
+  const maxSuggestionsRaw = Number(b.maxSuggestions);
+  const maxSuggestions = Number.isFinite(maxSuggestionsRaw) ? Math.max(1, Math.min(12, Math.floor(maxSuggestionsRaw))) : undefined;
+  return {
+    video: { uri: ref.uri, mimeType: ref.mimeType },
+    maxSuggestions,
   };
 }
 

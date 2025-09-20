@@ -17,6 +17,8 @@ type Props = {
   onUpdate: (id: string, changes: Partial<Shot>) => void;
   latestShotId: string | null;
   flashShotId: string | null;
+  transcriptSearchTerm: string;
+  transcriptMatchedShotIds: Set<string>;
 };
 
 function ScreenshotGridComponent({
@@ -27,6 +29,8 @@ function ScreenshotGridComponent({
   onUpdate,
   latestShotId,
   flashShotId,
+  transcriptSearchTerm,
+  transcriptMatchedShotIds,
 }: Props) {
   const mostRecentIndex = useMemo(
     () => shots.findIndex((shot) => shot.id === latestShotId),
@@ -73,6 +77,8 @@ function ScreenshotGridComponent({
               index={index}
               total={shots.length}
               isLatest={index === mostRecentIndex}
+              isSearchMatch={transcriptMatchedShotIds.has(shot.id)}
+              searchTerm={transcriptSearchTerm}
               flash={flashShotId === shot.id}
               onPreview={onPreview}
               onRemove={onRemove}
@@ -99,10 +105,18 @@ function areEqual(prev: Props, next: Props) {
       a.timeSec !== b.timeSec ||
       a.label !== b.label ||
       a.note !== b.note ||
-      a.dataUrl !== b.dataUrl
+      a.dataUrl !== b.dataUrl ||
+      a.transcriptSnippet !== b.transcriptSnippet ||
+      a.transcriptSegmentId !== b.transcriptSegmentId ||
+      a.origin !== b.origin
     ) {
       return false;
     }
+  }
+  if (prev.transcriptSearchTerm !== next.transcriptSearchTerm) return false;
+  if (prev.transcriptMatchedShotIds.size !== next.transcriptMatchedShotIds.size) return false;
+  for (const id of prev.transcriptMatchedShotIds) {
+    if (!next.transcriptMatchedShotIds.has(id)) return false;
   }
   return (
     prev.onRemove === next.onRemove &&

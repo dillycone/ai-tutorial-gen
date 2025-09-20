@@ -8,6 +8,8 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 
 ### Key Features
 
+- **🎙️ Transcript Alignment**: Upload caption files or auto-generate Gemini transcripts to surface searchable dialog snippets next to screenshots
+- **✨ Key-Frame Suggestions**: Let Gemini suggest scene-change captures and batch add them to your shot list with one click
 - **📹 Video Processing**: Upload videos and capture key screenshots at specific timestamps
 - **🤖 AI Generation**: Convert visual content into structured tutorials or meeting summaries using Gemini AI
 - **🧠 Smart Optimization**: DSPy 3 + GEPA automatically optimizes prompts for better output quality
@@ -92,18 +94,19 @@ The AI Tutorial Generator captures key moments from videos, organizes them into 
 
 ### Basic Workflow
 
-1. **Upload Video**: Drag & drop or select a video file (MP4, WebM, etc.)
-2. **Capture Screenshots**: Play the video and capture key moments with timestamps
-3. **Configure Options**: Choose schema type (Tutorial/Meeting Summary) and prompt strategy
-4. **Generate Content**: Process screenshots with AI to create structured output
-5. **Export**: Customize export settings and download as formatted PDF or copy the generated text
+1. **Upload Video**: Drag & drop or select a video file (MP4, WebM, etc.) then upload to Gemini storage
+2. **Sync Transcripts** *(optional)*: Upload an SRT/VTT/JSON transcript or let Gemini auto-transcribe and search for key phrases
+3. **Capture Screenshots**: Play the video and capture key moments manually or use **Suggest key frames** for AI-assisted captures
+4. **Configure Options**: Choose schema type (Tutorial/Meeting Summary) and prompt strategy
+5. **Generate Content**: Process screenshots (with transcript snippets) via Gemini to create structured output
+6. **Export**: Customize export settings and download as formatted PDF or copy the generated text
 
-### Video Requirements
+### Video & Transcript Requirements
 
-- **Formats**: MP4, WebM, AVI, MOV, MKV
-- **Size**: Recommended under 100MB for optimal performance
+- **Video Formats**: MP4, WebM, AVI, MOV, MKV (up to ~750 MB Gemini upload limit)
+- **Transcript Formats**: SRT (`.srt`), WebVTT (`.vtt`), JSON exports, or plain text summaries
 - **Duration**: Works best with videos under 30 minutes
-- **Quality**: Higher resolution provides better screenshot analysis
+- **Quality**: Higher resolution provides better screenshot and transcript accuracy
 
 ### Schema Types
 
@@ -122,6 +125,18 @@ Ideal for meeting recordings and discussions:
 - **Key Points**: Main discussion topics
 - **Action Items**: Tasks and assignments
 - **Next Steps**: Follow-up actions
+
+### Transcript & Key-Frame Tools
+
+#### Transcript Workbench
+- Upload caption files or auto-generate via **Suggest transcript** (Gemini 1.5)
+- Search across segments to jump the video player to matching dialog
+- Linked transcript snippets are embedded into the generation payload for richer context
+
+#### Key-Frame Suggestions
+- Gemini analyzes the uploaded video and proposes scene-change captures
+- Each suggestion is auto-labeled and flagged as **Suggested** in the screenshot grid
+- Batch additions respect existing shots (deduped within ±0.5 s)
 
 ### Prompt Strategies
 
@@ -173,6 +188,12 @@ Configure PDF output options via the Settings button in the Result section:
 - **Prompt Strategy**: Manual or DSPy optimization
 
 ### Architecture Improvements
+
+Recent platform upgrades include:
+
+- Transcript ingestion pipeline (parsing, validation, Gemini generation, prompt enrichment)
+- Key-frame suggestion service and client workflow
+- Screenshot metadata enhancements (transcript snippets, capture origin) feeding Gemini prompts
 
 The codebase has been significantly refactored for better maintainability and performance:
 

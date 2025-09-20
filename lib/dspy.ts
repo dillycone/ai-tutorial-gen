@@ -9,6 +9,9 @@ export type PromptShotSummary = {
   timecode?: string;
   label?: string;
   note?: string;
+  transcriptSnippet?: string;
+  transcriptSegmentId?: string;
+  origin?: "manual" | "suggested";
 };
 
 export type PromptBlueprint = {
