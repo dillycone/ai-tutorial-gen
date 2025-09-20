@@ -1,11 +1,30 @@
 // lib/markdown.ts
-// Extremely small markdown -> HTML conversion just for demo (feel free to swap in a real parser).
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkRehype from "remark-rehype";
+import rehypeSanitize from "rehype-sanitize";
+import rehypeStringify from "rehype-stringify";
+
+const processor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkRehype)
+  .use(rehypeSanitize)
+  .use(rehypeStringify);
+
+const escapeHtml = (input: string) =>
+  input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 export function markdownToHtml(md: string) {
-  return md
-    .replace(/^# (.*$)/gim, "<h1>$1</h1>")
-    .replace(/^## (.*$)/gim, "<h2>$1</h2>")
-    .replace(/^### (.*$)/gim, "<h3>$1</h3>")
-    .replace(/\*\*(.*)\*\*/gim, "<b>$1</b>")
-    .replace(/\*(.*)\*/gim, "<i>$1</i>")
-    .replace(/\n$/gim, "<br/>");
+  try {
+    return processor.processSync(md).toString();
+  } catch {
+    return `<p>${escapeHtml(md)}</p>`;
+  }
 }

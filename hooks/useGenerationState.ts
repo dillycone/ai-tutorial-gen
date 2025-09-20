@@ -60,6 +60,56 @@ const PARALLEL_ENABLED_KEY = "dspy.parallel.enabled";
 const PARALLEL_WORKERS_KEY = "dspy.parallel.workers";
 const PARALLEL_BATCH_KEY = "dspy.parallel.batchSize";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const extractNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (isRecord(value) && typeof value.value === "number" && Number.isFinite(value.value)) {
+    return value.value;
+  }
+  return undefined;
+};
+
+const extractBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (isRecord(value) && typeof value.value === "boolean") {
+    return value.value;
+  }
+  return undefined;
+};
+
+const extractWeights = (value: unknown): FeatureWeights | undefined => {
+  if (!isRecord(value)) return undefined;
+  const source = value.weights && isRecord(value.weights) ? value.weights : value;
+  const weights: FeatureWeights = {};
+  for (const [key, entry] of Object.entries(source)) {
+    const num = Number(entry);
+    if (Number.isFinite(num)) {
+      weights[key] = num;
+    }
+  }
+  return Object.keys(weights).length > 0 ? weights : undefined;
+};
+
+const extractInteger = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+  }
+  if (isRecord(value)) {
+    return extractInteger(value.value);
+  }
+  return undefined;
+};
+
 export function useGenerationState(): UseGenerationStateReturn {
   // Core options
   const [enforceSchema, setEnforceSchema] = useState(true);
@@ -202,16 +252,10 @@ export function useGenerationState(): UseGenerationStateReturn {
   useEffect(() => {
     // jsonBonus
     const onJsonBonus = (event: Event) => {
-      const ce = event as CustomEvent<any>;
-      const detail = (ce as any).detail;
-      const val =
-        typeof detail === "number"
-          ? detail
-          : typeof detail?.value === "number"
-            ? detail.value
-            : undefined;
-      if (typeof val === "number") {
-        const clamped = Math.max(0, Math.min(1, val));
+      const detail = (event as CustomEvent<unknown>).detail;
+      const raw = extractNumber(detail);
+      if (typeof raw === "number") {
+        const clamped = Math.max(0, Math.min(1, raw));
         setJsonBonusLs(clamped);
         try {
           safeSetItem(JSON_BONUS_KEY, String(clamped));
@@ -223,20 +267,9 @@ export function useGenerationState(): UseGenerationStateReturn {
 
     // featureWeights
     const onFeatureWeights = (event: Event) => {
-      const ce = event as CustomEvent<any>;
-      const detail = (ce as any).detail;
-      const obj =
-        detail && typeof detail === "object" && detail.weights && typeof detail.weights === "object"
-          ? detail.weights
-          : typeof detail === "object"
-            ? detail
-            : null;
-      if (obj && typeof obj === "object") {
-        const weights: FeatureWeights = {};
-        for (const [k, v] of Object.entries(obj)) {
-          const num = Number(v);
-          if (Number.isFinite(num)) weights[k] = num;
-        }
+      const detail = (event as CustomEvent<unknown>).detail;
+      const weights = extractWeights(detail);
+      if (weights) {
         setFeatureWeightsState(weights);
         try {
           const key = getStorageKey(schemaType);
@@ -249,18 +282,12 @@ export function useGenerationState(): UseGenerationStateReturn {
 
     // alwaysFullValidation
     const onAlwaysFullValidation = (event: Event) => {
-      const ce = event as CustomEvent<any>;
-      const detail = (ce as any).detail;
-      const val =
-        typeof detail === "boolean"
-          ? detail
-          : typeof detail?.value === "boolean"
-            ? detail.value
-            : undefined;
-      if (typeof val === "boolean") {
-        setAlwaysFullValidationLs(val);
+      const detail = (event as CustomEvent<unknown>).detail;
+      const value = extractBoolean(detail);
+      if (typeof value === "boolean") {
+        setAlwaysFullValidationLs(value);
         try {
-          safeSetItem(ALWAYS_FULL_VALIDATION_KEY, String(val));
+          safeSetItem(ALWAYS_FULL_VALIDATION_KEY, String(value));
         } catch {
           // ignore
         }
@@ -269,51 +296,46 @@ export function useGenerationState(): UseGenerationStateReturn {
 
     // parallelEval settings
     const onParallelEval = (event: Event) => {
-      const ce = event as CustomEvent<any>;
-      const detail = (ce as any).detail;
-      if (detail && typeof detail === "object") {
-        const enabled =
-          typeof detail.enabled === "boolean"
-            ? detail.enabled
-            : typeof detail?.value === "boolean"
-              ? detail.value
-              : undefined;
-        const workers =
-          typeof detail.workers === "number"
-            ? detail.workers
-            : typeof detail.workers === "string"
-              ? Number.parseInt(detail.workers, 10)
-              : undefined;
-        const batch =
-          typeof detail.batchSize === "number"
-            ? detail.batchSize
-            : typeof detail.batchSize === "string"
-              ? Number.parseInt(detail.batchSize, 10)
-              : undefined;
+      const detail = (event as CustomEvent<unknown>).detail;
+      const topLevel = extractBoolean(detail);
+      if (typeof topLevel === "boolean") {
+        setParallelEvalEnabledLs(topLevel);
+        try {
+          safeSetItem(PARALLEL_ENABLED_KEY, String(topLevel));
+        } catch {
+          // ignore
+        }
+      }
 
-        if (typeof enabled === "boolean") {
-          setParallelEvalEnabledLs(enabled);
-          try {
-            safeSetItem(PARALLEL_ENABLED_KEY, String(enabled));
-          } catch {
-            // ignore
-          }
+      if (!isRecord(detail)) return;
+
+      const enabled = extractBoolean(detail.enabled ?? detail.value);
+      if (typeof enabled === "boolean") {
+        setParallelEvalEnabledLs(enabled);
+        try {
+          safeSetItem(PARALLEL_ENABLED_KEY, String(enabled));
+        } catch {
+          // ignore
         }
-        if (Number.isFinite(workers as number) && (workers as number) > 0) {
-          setParallelWorkersLs(workers as number);
-          try {
-            safeSetItem(PARALLEL_WORKERS_KEY, String(workers));
-          } catch {
-            // ignore
-          }
+      }
+
+      const workers = extractInteger(detail.workers);
+      if (typeof workers === "number" && workers > 0) {
+        setParallelWorkersLs(workers);
+        try {
+          safeSetItem(PARALLEL_WORKERS_KEY, String(workers));
+        } catch {
+          // ignore
         }
-        if (Number.isFinite(batch as number) && (batch as number) > 0) {
-          setParallelBatchSizeLs(batch as number);
-          try {
-            safeSetItem(PARALLEL_BATCH_KEY, String(batch));
-          } catch {
-            // ignore
-          }
+      }
+
+      const batch = extractInteger(detail.batchSize);
+      if (typeof batch === "number" && batch > 0) {
+        setParallelBatchSizeLs(batch);
+        try {
+          safeSetItem(PARALLEL_BATCH_KEY, String(batch));
+        } catch {
+          // ignore
         }
       }
     };

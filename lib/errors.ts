@@ -30,10 +30,10 @@ function safeStringify(obj: unknown): string {
 }
 
 type ConsoleLike = {
-  debug: (message?: any, ...optionalParams: any[]) => void;
-  info: (message?: any, ...optionalParams: any[]) => void;
-  warn: (message?: any, ...optionalParams: any[]) => void;
-  error: (message?: any, ...optionalParams: any[]) => void;
+  debug: (message?: unknown, ...optionalParams: unknown[]) => void;
+  info: (message?: unknown, ...optionalParams: unknown[]) => void;
+  warn: (message?: unknown, ...optionalParams: unknown[]) => void;
+  error: (message?: unknown, ...optionalParams: unknown[]) => void;
 };
 
 const con: ConsoleLike =
