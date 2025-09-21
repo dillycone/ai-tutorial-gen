@@ -31,7 +31,40 @@ export type TranscriptTrack = {
   fileName?: string;
 };
 
-export type SchemaType = "tutorial" | "meetingSummary";
+export type SchemaType = string;
+
+export type SchemaTemplate = {
+  id: string;
+  name: string;
+  description?: string;
+  persona: string;
+  requirements: string;
+  fallbackOutput: string;
+  hintLabel: string;
+  schema: unknown;
+  styleGuide?: string;
+  builtIn?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  version?: number;
+};
+
+export type SchemaTemplateSummary = Pick<
+  SchemaTemplate,
+  "id" | "name" | "description" | "hintLabel" | "builtIn" | "updatedAt"
+>;
+
+export type SchemaTemplateInput = {
+  id: string;
+  name: string;
+  description?: string;
+  persona: string;
+  requirements: string;
+  fallbackOutput: string;
+  hintLabel: string;
+  schema: unknown;
+  styleGuide?: string;
+};
 
 export type PromptMode = "manual" | "dspy";
 
@@ -147,4 +180,83 @@ export type DSPyOptions = {
    * Timeout for local evaluation (ms).
    */
   evalTimeoutMs?: number;
+};
+
+export type ResultViewMode = "preview" | "edit" | "json";
+
+export type TutorialStep = {
+  stepTitle: string;
+  description: string;
+  timecodes?: {
+    start?: string;
+    end?: string;
+  } | null;
+  screenshots?: string[] | null;
+};
+
+export type TutorialResult = {
+  title: string;
+  summary: string;
+  prerequisites: string[];
+  steps: TutorialStep[];
+};
+
+export type MeetingAttendee = {
+  name: string;
+  role?: string;
+  department?: string;
+};
+
+export type MeetingTopic = {
+  order: number;
+  title: string;
+  details: string;
+  startTimecode?: string;
+  endTimecode?: string;
+  speaker?: string;
+};
+
+export type MeetingDecision = {
+  description: string;
+  owners?: string[];
+  status?: string;
+  timecode?: string;
+};
+
+export type MeetingActionItem = {
+  task: string;
+  owner: string;
+  dueDate?: string;
+  timecode?: string;
+};
+
+export type MeetingSummaryResult = {
+  meetingTitle?: string;
+  meetingDate?: string;
+  durationMinutes?: number;
+  attendees?: MeetingAttendee[];
+  summary?: string;
+  keyTopics: MeetingTopic[];
+  decisions?: MeetingDecision[];
+  actionItems?: MeetingActionItem[];
+  followUps?: string[];
+};
+
+export type StructuredResultData =
+  | { templateId: "tutorial"; data: TutorialResult }
+  | { templateId: "meetingSummary"; data: MeetingSummaryResult }
+  | { templateId: string; data: Record<string, unknown> };
+
+export type StructuredResultSource = "ai" | "edited";
+
+export type WorkbenchResult = {
+  templateId: string;
+  schema?: unknown;
+  rawText: string;
+  jsonText: string;
+  data: StructuredResultData["data"] | null;
+  valid: boolean;
+  errors?: string[];
+  source: StructuredResultSource;
+  updatedAt: number;
 };

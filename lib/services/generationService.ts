@@ -2,6 +2,7 @@ import { createUserContent, createPartFromUri } from "@google/genai";
 import { join } from "path";
 import { ai } from "@/lib/gemini";
 import { getSchemaConfig, promoteBaselinePrompt } from "@/lib/geminiPrompts";
+import { listBuiltInSchemaTemplates } from "@/lib/schemaTemplates";
 import {
   optimizePromptWithDSPy,
   type DspyOptimizationPayload,
@@ -10,7 +11,7 @@ import {
 } from "@/lib/dspy";
 import { isTrustedUri, isValidMediaType } from "@/lib/validators/mediaValidators";
 import { AppError, logError } from "@/lib/errors";
-import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaTemplate, SchemaType } from "@/lib/types";
 import type { GenerateRequestBody } from "@/lib/types/api";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-1.5-pro";
@@ -53,11 +54,28 @@ export async function generateStructuredOutput(body: GenerateRequestBody): Promi
   const dspyOptions = body.dspyOptions ?? {};
   const promoteBaseline = Boolean(body.promoteBaseline);
 
-  const mode: SchemaType = schemaType === "meetingSummary" ? "meetingSummary" : "tutorial";
+  const requestedSchemaId: SchemaType =
+    typeof schemaType === "string" && schemaType.trim().length > 0 ? (schemaType as string).trim() : "tutorial";
 
-  const tutorialConfig = await getSchemaConfig("tutorial");
-  const meetingConfig = await getSchemaConfig("meetingSummary");
-  const schemaConfig = mode === "tutorial" ? tutorialConfig : meetingConfig;
+  let schemaConfig: SchemaTemplate;
+  try {
+    schemaConfig = await getSchemaConfig(requestedSchemaId);
+  } catch {
+    throw new AppError(`Unknown schema template: ${requestedSchemaId}`, { status: 400 });
+  }
+  const referenceTemplates = new Map<SchemaType, SchemaTemplate>();
+  for (const template of listBuiltInSchemaTemplates()) {
+    const hydrated = await getSchemaConfig(template.id);
+    referenceTemplates.set(hydrated.id, hydrated);
+  }
+  referenceTemplates.set(schemaConfig.id, schemaConfig);
+  const referencePrompts = Array.from(referenceTemplates.values()).reduce<Record<SchemaType, PromptBlueprint>>(
+    (acc, template) => {
+      acc[template.id] = toBlueprint(template);
+      return acc;
+    },
+    {},
+  );
 
   let personaText = schemaConfig.persona;
   let requirementsText = schemaConfig.requirements;
@@ -79,12 +97,12 @@ export async function generateStructuredOutput(body: GenerateRequestBody): Promi
       const checkpointPath =
         dspyOptions.checkpointPath ??
         process.env.DSPY_CHECKPOINT_PATH ??
-        join(process.cwd(), "python", "checkpoints", `${mode}-optimizer.json`);
+        join(process.cwd(), "python", "checkpoints", `${requestedSchemaId}-optimizer.json`);
 
       const experiencePath =
         dspyOptions.experiencePath ??
         process.env.DSPY_EXPERIENCE_PATH ??
-        join(process.cwd(), "python", "experience", `${mode}-episodes.jsonl`);
+        join(process.cwd(), "python", "experience", `${requestedSchemaId}-episodes.jsonl`);
 
       const envTopK = Number.parseInt(process.env.DSPY_EXPERIENCE_TOPK ?? "", 10);
       const rawTopK =
@@ -117,15 +135,12 @@ export async function generateStructuredOutput(body: GenerateRequestBody): Promi
           : Number.parseInt(process.env.DSPY_RPM_LIMIT ?? "", 10) || 8;
 
       const optimizationPayload: DspyOptimizationPayload = {
-        schemaType: mode,
+        schemaType: requestedSchemaId,
         enforceSchema,
         titleHint,
         shots: shotsMeta,
         basePrompt: toBlueprint(schemaConfig),
-        referencePrompts: {
-          tutorial: toBlueprint(tutorialConfig),
-          meetingSummary: toBlueprint(meetingConfig),
-        },
+        referencePrompts,
         checkpointPath,
         experiencePath,
         experienceTopK,
@@ -176,7 +191,7 @@ export async function generateStructuredOutput(body: GenerateRequestBody): Promi
         let baselinePromoted = false;
         if (promoteBaseline && optimized.analysis?.score != null) {
           try {
-            baselinePromoted = await promoteBaselinePrompt(mode, {
+            baselinePromoted = await promoteBaselinePrompt(requestedSchemaId, {
               persona: personaText,
               requirements: requirementsText,
               fallbackOutput: fallbackOutputText,

@@ -87,6 +87,10 @@ export default function VideoWorkbench() {
     promptMode,
     setPromptMode,
     promptMeta,
+    schemaTemplates,
+    schemaTemplatesLoading,
+    schemaTemplatesError,
+    createSchemaTemplate,
     showAdvanced,
     setShowAdvanced,
     promoteBaseline,
@@ -101,9 +105,14 @@ export default function VideoWorkbench() {
     handleTranscriptSegmentFocus,
     handleSuggestKeyframes,
     handleGenerate,
-    resultText,
-    resultTab,
-    setResultTab,
+    result,
+    resultView,
+    setResultView,
+    isResultDirty,
+    updateResultData,
+    setResultJsonText,
+    formatResultJson,
+    resetResultEdits,
     showToast,
     handleRemoveShot,
     handleUpdateShot,
@@ -123,6 +132,11 @@ export default function VideoWorkbench() {
   const [showExportSettings, setShowExportSettings] = useState(false);
   const handleOpenExportSettings = useCallback(() => setShowExportSettings(true), []);
   const handleCloseExportSettings = useCallback(() => setShowExportSettings(false), []);
+
+  const selectedSchemaTemplate = useMemo(
+    () => schemaTemplates.find((template) => template.id === schemaType) ?? null,
+    [schemaTemplates, schemaType],
+  );
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -195,6 +209,10 @@ export default function VideoWorkbench() {
         promptMode={promptMode}
         setPromptMode={setPromptMode}
         promptMeta={promptMeta}
+        schemaTemplates={schemaTemplates}
+        schemaTemplatesLoading={schemaTemplatesLoading}
+        schemaTemplatesError={schemaTemplatesError}
+        onCreateSchemaTemplate={createSchemaTemplate}
         showAdvanced={showAdvanced}
         setShowAdvanced={setShowAdvanced}
         promoteBaseline={promoteBaseline}
@@ -205,16 +223,21 @@ export default function VideoWorkbench() {
       />
 
       <ResultSection
-        resultText={resultText}
-        resultTab={resultTab}
-        setResultTab={setResultTab}
-        enforceSchema={enforceSchema}
+        result={result}
+        resultView={resultView}
+        onSetView={setResultView}
+        onEditData={updateResultData}
+        onEditJson={setResultJsonText}
+        onFormatJson={formatResultJson}
+        onResetEdits={resetResultEdits}
+        onExport={handleExportPdf}
+        isExporting={isExporting}
         schemaType={schemaType}
+        schemaTemplate={selectedSchemaTemplate}
         shots={shots}
         promptMeta={promptMeta}
         onCopy={handleCopyToast}
-        onExportPdf={handleExportPdf}
-        isExporting={isExporting}
+        isResultDirty={isResultDirty}
         onOpenExportSettings={handleOpenExportSettings}
       />
 

@@ -23,11 +23,15 @@ import type { TranscriptSegmentPayload } from "@/lib/types/api";
 import type { SchemaType, PromptMode, TranscriptSource } from "@/lib/types";
 
 function isSchemaType(v: unknown): v is SchemaType {
-  return v === "tutorial" || v === "meetingSummary";
+  return typeof v === "string" && v.trim().length > 0;
 }
 
 function isPromptMode(v: unknown): v is PromptMode {
   return v === "manual" || v === "dspy";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function requireFileFromForm(form: FormData): File {
@@ -156,7 +160,7 @@ export function parseGenerateRequest(body: unknown): GenerateRequestBody {
 
   const enforceSchema = Boolean(b.enforceSchema);
   const titleHint = typeof b.titleHint === "string" ? b.titleHint : undefined;
-  const schemaType = isSchemaType(b.schemaType) ? b.schemaType : (undefined as unknown as SchemaType | undefined);
+  const schemaType = isSchemaType(b.schemaType) ? (b.schemaType as string).trim() : (undefined as unknown as SchemaType | undefined);
   const promptMode = isPromptMode(b.promptMode) ? b.promptMode : (undefined as unknown as PromptMode | undefined);
   let shots: GenerateRequestBody["shots"];
   if (Array.isArray(b.shots)) {
@@ -206,10 +210,35 @@ export function parseExportRequest(body: unknown): ExportRequestBody {
   if (!isSchemaType(b.schemaType)) {
     throw new ValidationError("Invalid or missing schemaType");
   }
-  if (typeof b.resultText !== "string") {
-    throw new ValidationError("Invalid or missing resultText");
-  }
+  const schemaType = (b.schemaType as string).trim() as SchemaType;
   const enforceSchema = Boolean(b.enforceSchema);
+
+  let structuredResult: ExportRequestBody["structuredResult"];
+  if (b.structuredResult !== undefined) {
+    if (!isPlainObject(b.structuredResult)) {
+      throw new ValidationError("structuredResult must be an object when provided");
+    }
+    const sr = b.structuredResult as Record<string, unknown>;
+    const templateId = typeof sr.templateId === "string" && sr.templateId.trim() ? sr.templateId.trim() : null;
+    if (!templateId) {
+      throw new ValidationError("structuredResult.templateId is required");
+    }
+    if (!isPlainObject(sr.data)) {
+      throw new ValidationError("structuredResult.data must be an object");
+    }
+    structuredResult = {
+      templateId,
+      data: sr.data as Record<string, unknown>,
+    };
+  }
+
+  const legacyResultText = typeof b.resultText === "string" ? b.resultText : undefined;
+  const rawText = typeof b.rawText === "string" ? b.rawText : legacyResultText;
+
+  if (!structuredResult && (rawText === undefined || rawText.trim().length === 0)) {
+    throw new ValidationError("Export request requires structuredResult or rawText");
+  }
+
   const shots = Array.isArray(b.shots) ? b.shots : [];
   for (const s of shots) {
     if (
@@ -277,9 +306,11 @@ export function parseExportRequest(body: unknown): ExportRequestBody {
   };
 
   return {
-    schemaType: b.schemaType,
+    schemaType,
     enforceSchema,
-    resultText: b.resultText,
+    structuredResult,
+    rawText,
+    resultText: legacyResultText,
     shots,
     options,
   };

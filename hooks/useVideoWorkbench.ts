@@ -6,13 +6,23 @@ import { formatFileSize, toTimecode } from "@/lib/format";
 import {
   PromptMode,
   PromptOptimizationMeta,
+  ResultViewMode,
+  SchemaTemplate,
+  SchemaTemplateInput,
   SchemaType,
   Shot,
-  TranscriptTrack,
   TranscriptSegment,
+  TranscriptTrack,
+  WorkbenchResult,
 } from "@/lib/types";
 import type { ExportRequestBody, GenerateRequestBody } from "@/lib/types/api";
 import type { GeminiFileRef } from "@/lib/geminiUploads";
+import {
+  extractFirstJsonBlock,
+  normalizeResultForTemplate,
+  toPrettyJson,
+  tryParseJsonLoose,
+} from "@/lib/results";
 import { useShotManager } from "@/hooks/useShotManager";
 import { useDspyPreferences } from "@/hooks/useDspyPreferences";
 import {
@@ -22,6 +32,8 @@ import {
   uploadVideoViaApi,
   generateTranscriptFromVideo,
   requestKeyframeSuggestions,
+  fetchSchemaTemplates,
+  createSchemaTemplateViaApi,
 } from "@/lib/services/workbenchApi";
 import {
   parseTranscriptFile,
@@ -76,6 +88,12 @@ const TRANSCRIPT_SNIPPET_LIMIT = 240;
 const SUGGESTION_DEDUPE_TOLERANCE = 0.5;
 const TIMECODE_PATTERN = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
+const compareSchemaTemplates = (a: SchemaTemplate, b: SchemaTemplate) => {
+  if (a.builtIn && !b.builtIn) return -1;
+  if (!a.builtIn && b.builtIn) return 1;
+  return a.name.localeCompare(b.name);
+};
+
 function parseTimecodeToSeconds(timecode?: string | null): number | null {
   if (!timecode) return null;
   const match = timecode.trim().match(TIMECODE_PATTERN);
@@ -122,16 +140,25 @@ export type UseVideoWorkbenchReturn = {
   promptMode: PromptMode;
   setPromptMode: (mode: PromptMode) => void;
   promptMeta: PromptOptimizationMeta | null;
+  schemaTemplates: SchemaTemplate[];
+  schemaTemplatesLoading: boolean;
+  schemaTemplatesError: string | null;
+  refreshSchemaTemplates: () => Promise<void>;
+  createSchemaTemplate: (input: SchemaTemplateInput) => Promise<SchemaTemplate>;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
   promoteBaseline: boolean;
   setPromoteBaseline: (value: boolean) => void;
   exportOptions: ExportOptionsState;
   setExportOptions: (next: ExportOptionsState) => void;
-  resultText: string | null;
-  setResultText: (value: string | null) => void;
-  resultTab: "formatted" | "json";
-  setResultTab: (value: "formatted" | "json") => void;
+  result: WorkbenchResult | null;
+  resultView: ResultViewMode;
+  setResultView: (mode: ResultViewMode) => void;
+  isResultDirty: boolean;
+  updateResultData: (updater: (draft: Record<string, unknown>) => void) => void;
+  setResultJsonText: (nextJson: string) => void;
+  formatResultJson: () => void;
+  resetResultEdits: () => void;
   currentTimecode: string;
   videoDuration: string | null;
   videoFileSize: string | null;
@@ -191,6 +218,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const [promptMeta, setPromptMeta] = useState<PromptOptimizationMeta | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [promoteBaseline, setPromoteBaseline] = useState(true);
+  const [schemaTemplates, setSchemaTemplates] = useState<SchemaTemplate[]>([]);
+  const [schemaTemplatesLoading, setSchemaTemplatesLoading] = useState(false);
+  const [schemaTemplatesError, setSchemaTemplatesError] = useState<string | null>(null);
   const {
     jsonBonus,
     featureWeights,
@@ -214,8 +244,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     imageMaxWidth: 1280,
   });
 
-  const [resultText, setResultText] = useState<string | null>(null);
-  const [resultTab, setResultTab] = useState<"formatted" | "json">("formatted");
+  const [result, setResult] = useState<WorkbenchResult | null>(null);
+  const [resultView, setResultView] = useState<ResultViewMode>("preview");
+  const resultBaselineRef = useRef<WorkbenchResult | null>(null);
   const [previewShotId, setPreviewShotId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
 
@@ -224,6 +255,202 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   const showToast = useCallback((type: ToastState["type"], message: string) => {
     setToast({ id: Date.now(), type, message });
   }, []);
+
+  const setResultFromAi = useCallback(
+    ({ rawText, templateId, schema }: { rawText: string; templateId: string; schema?: unknown }) => {
+      const candidate = extractFirstJsonBlock(rawText) ?? rawText;
+      let jsonText = candidate.trim() || rawText.trim();
+      let data: Record<string, unknown> | null = null;
+      let valid = false;
+      let errors: string[] = [];
+
+      try {
+        const parsed = tryParseJsonLoose(candidate);
+        const normalized = normalizeResultForTemplate(templateId, parsed);
+        data = normalized.data;
+        valid = normalized.valid;
+        errors = normalized.errors;
+        if (data) {
+          jsonText = toPrettyJson(data);
+        } else if (parsed && typeof parsed === "object") {
+          jsonText = toPrettyJson(parsed);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to parse result JSON";
+        errors = [message];
+      }
+
+      const nextResult: WorkbenchResult = {
+        templateId,
+        schema,
+        rawText,
+        jsonText,
+        data,
+        valid,
+        errors: errors.length ? errors : undefined,
+        source: "ai",
+        updatedAt: Date.now(),
+      };
+
+      setResult(nextResult);
+      setResultView("preview");
+      resultBaselineRef.current = nextResult;
+    },
+    [],
+  );
+
+  const updateResultData = useCallback((updater: (draft: Record<string, unknown>) => void) => {
+    setResult((current) => {
+      if (!current) return current;
+      const clone = current.data
+        ? (JSON.parse(JSON.stringify(current.data)) as Record<string, unknown>)
+        : ({} as Record<string, unknown>);
+
+      updater(clone);
+      const normalized = normalizeResultForTemplate(current.templateId, clone);
+      const dataForState = (normalized.data ?? clone) as Record<string, unknown>;
+      let jsonText = current.jsonText;
+      try {
+        jsonText = toPrettyJson(dataForState);
+      } catch {
+        // keep previous jsonText on serialization failure
+      }
+
+      return {
+        ...current,
+        data: dataForState,
+        jsonText,
+        valid: normalized.valid,
+        errors: normalized.errors.length ? normalized.errors : undefined,
+        source: "edited",
+        updatedAt: Date.now(),
+      };
+    });
+  }, []);
+
+  const setResultJsonText = useCallback((nextJson: string) => {
+    setResult((current) => {
+      if (!current) return current;
+      try {
+        const parsed = tryParseJsonLoose(nextJson);
+        const normalized = normalizeResultForTemplate(current.templateId, parsed);
+        const dataForState = normalized.data ?? (parsed as Record<string, unknown> | null);
+        return {
+          ...current,
+          data: dataForState ?? current.data,
+          jsonText: normalized.data ? toPrettyJson(normalized.data) : nextJson,
+          valid: normalized.valid,
+          errors: normalized.errors.length ? normalized.errors : undefined,
+          source: "edited",
+          updatedAt: Date.now(),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid JSON";
+        return {
+          ...current,
+          jsonText: nextJson,
+          valid: false,
+          errors: [message],
+          source: "edited",
+          updatedAt: Date.now(),
+        };
+      }
+    });
+  }, []);
+
+  const formatResultJson = useCallback(() => {
+    setResult((current) => {
+      if (!current || !current.jsonText.trim()) return current;
+      try {
+        const parsed = tryParseJsonLoose(current.jsonText);
+        const normalized = normalizeResultForTemplate(current.templateId, parsed);
+        const dataForState = normalized.data ?? (parsed as Record<string, unknown> | null) ?? current.data ?? {};
+        const jsonText = toPrettyJson(dataForState);
+        return {
+          ...current,
+          data: dataForState,
+          jsonText,
+          valid: normalized.valid,
+          errors: normalized.errors.length ? normalized.errors : undefined,
+          source: "edited",
+          updatedAt: Date.now(),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid JSON";
+        return {
+          ...current,
+          valid: false,
+          errors: [message],
+          source: "edited",
+          updatedAt: Date.now(),
+        };
+      }
+    });
+  }, []);
+
+  const resetResultEdits = useCallback(() => {
+    const baseline = resultBaselineRef.current;
+    if (!baseline) return;
+    setResult({
+      ...baseline,
+      source: "ai",
+      updatedAt: Date.now(),
+    });
+    setResultView("preview");
+  }, []);
+
+  const changeResultView = useCallback((mode: ResultViewMode) => {
+    setResultView(mode);
+  }, []);
+
+  const refreshSchemaTemplates = useCallback(async () => {
+    setSchemaTemplatesLoading(true);
+    try {
+      const templates = await fetchSchemaTemplates();
+      const ordered = templates.slice().sort(compareSchemaTemplates);
+      setSchemaTemplates(ordered);
+      setSchemaTemplatesError(null);
+      if (ordered.length > 0 && !ordered.some((tpl) => tpl.id === schemaType)) {
+        const fallback = ordered.find((tpl) => tpl.builtIn) ?? ordered[0];
+        if (fallback && fallback.id !== schemaType) {
+          setSchemaType(fallback.id as SchemaType);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load schema templates";
+      setSchemaTemplatesError(message);
+      showToast("error", message);
+    } finally {
+      setSchemaTemplatesLoading(false);
+    }
+  }, [schemaType, setSchemaType, showToast]);
+
+  useEffect(() => {
+    void refreshSchemaTemplates();
+  }, [refreshSchemaTemplates]);
+
+  const handleCreateSchemaTemplate = useCallback(
+    async (input: SchemaTemplateInput) => {
+      try {
+        const template = await createSchemaTemplateViaApi(input);
+        setSchemaTemplates((prev) => {
+          const merged = [...prev.filter((tpl) => tpl.id !== template.id), template];
+          return merged.sort(compareSchemaTemplates);
+        });
+        setSchemaTemplatesError(null);
+        if (template.id !== schemaType) {
+          setSchemaType(template.id as SchemaType);
+        }
+        showToast("success", `Saved template ${template.name}`);
+        return template;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create schema template";
+        showToast("error", message);
+        throw error instanceof Error ? error : new Error(message);
+      }
+    },
+    [schemaType, setSchemaType, showToast],
+  );
 
   const transcriptSegments = useMemo(
     () => (transcriptTrack ? transcriptTrack.segments ?? [] : []),
@@ -368,11 +595,17 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       { id: 4, title: "Result", description: "Review the structured output" },
     ];
 
+    const hasResult = Boolean(
+      (result?.data && Object.keys(result.data).length > 0) ||
+        (typeof result?.jsonText === "string" && result.jsonText.trim().length > 0) ||
+        (typeof result?.rawText === "string" && result.rawText.trim().length > 0),
+    );
+
     const done = [
       Boolean(videoUrl),
       shots.length > 0,
       Boolean(videoOnGemini) && shots.length > 0,
-      Boolean(resultText),
+      hasResult,
     ];
 
     const firstIncomplete = done.findIndex((flag) => !flag);
@@ -384,7 +617,7 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       else if (index === currentIndex) status = "current";
       return { ...def, status };
     });
-  }, [resultText, shots.length, videoOnGemini, videoUrl]);
+  }, [result, shots.length, videoOnGemini, videoUrl]);
 
   const resetSelection = useCallback(() => {
     setVideoMetadata(null);
@@ -394,8 +627,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     setTranscriptStatus("idle");
     setTranscriptError(null);
     setTranscriptSearchTerm("");
-    setResultText(null);
-    setResultTab("formatted");
+    setResult(null);
+    setResultView("preview");
+    resultBaselineRef.current = null;
     setPromptMeta(null);
   }, [resetShots]);
 
@@ -780,8 +1014,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     }
 
     setBusyPhase("generate");
-    setResultText(null);
-    setResultTab("formatted");
+    setResult(null);
+    setResultView("preview");
+    resultBaselineRef.current = null;
     setPromptMeta(null);
     showToast("info", "Preparing screenshots for Gemini…");
 
@@ -866,8 +1101,10 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
         promoteBaseline: promptModeState === "dspy" ? promoteBaseline : false,
       };
 
-      const { rawText, promptMeta: meta } = await generateStructuredOutput(payload);
-      setResultText(rawText ?? "");
+      const { rawText = "", promptMeta: meta } = await generateStructuredOutput(payload);
+      const activeTemplate = schemaTemplates.find((template) => template.id === schemaType) ?? null;
+      const templateId = activeTemplate?.id ?? schemaType;
+      setResultFromAi({ rawText, templateId, schema: activeTemplate?.schema });
       setPromptMeta(meta ?? null);
       showToast("success", "Structured result is ready");
     } catch (error) {
@@ -888,12 +1125,14 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     promoteBaseline,
     promptModeState,
     schemaType,
+    schemaTemplates,
     shots,
     showToast,
     titleHint,
     transcriptTrack,
     videoOnGemini,
     jsonBonus,
+    setResultFromAi,
   ]);
 
   const handleVideoLoaded = useCallback(() => {
@@ -923,9 +1162,18 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
   );
 
   const handleExportPdf = useCallback(async () => {
-    if (!resultText) {
+    if (!result || (!result.data && !result.jsonText && !result.rawText)) {
       showToast("error", "Generate a result before exporting.");
       return;
+    }
+
+    const structuredResultPayload =
+      result.valid && result.data
+        ? { templateId: result.templateId, data: result.data }
+        : undefined;
+
+    if (!structuredResultPayload && result.errors?.length) {
+      showToast("info", "Result has validation issues; exporting fallback text.");
     }
 
     setBusyPhase("export");
@@ -935,7 +1183,8 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       const body: ExportRequestBody = {
         schemaType,
         enforceSchema,
-        resultText,
+        structuredResult: structuredResultPayload,
+        rawText: result.rawText || result.jsonText || "",
         shots: shots.map(({ id, label, note, timecode, dataUrl }) => ({
           id,
           label,
@@ -982,7 +1231,6 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
       const anchor = document.createElement("a");
       anchor.href = url;
 
-      // Prefer filename from Content-Disposition when available
       const fallbackFilename = schemaType === "tutorial" ? "tutorial-guide.pdf" : "meeting-summary.pdf";
       anchor.download = serverFilename ?? fallbackFilename;
 
@@ -996,8 +1244,9 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     } finally {
       setBusyPhase(null);
     }
-  }, [enforceSchema, resultText, schemaType, shots, showToast, exportOptions]);
+  }, [enforceSchema, exportOptions, result, schemaType, shots, showToast]);
 
+  const isResultDirty = result?.source === "edited";
   const suggestingKeyframes = busyPhase === "suggest";
   const readyToGenerate = Boolean(videoOnGemini) && shots.length > 0 && !busy;
 
@@ -1039,16 +1288,25 @@ export function useVideoWorkbench(): UseVideoWorkbenchReturn {
     promptMode: promptModeState,
     setPromptMode,
     promptMeta,
+    schemaTemplates,
+    schemaTemplatesLoading,
+    schemaTemplatesError,
+    refreshSchemaTemplates,
+    createSchemaTemplate: handleCreateSchemaTemplate,
     showAdvanced,
     setShowAdvanced,
     promoteBaseline,
     setPromoteBaseline,
     exportOptions,
     setExportOptions,
-    resultText,
-    setResultText,
-    resultTab,
-    setResultTab,
+    result,
+    resultView,
+    setResultView: changeResultView,
+    isResultDirty,
+    updateResultData,
+    setResultJsonText,
+    formatResultJson,
+    resetResultEdits,
     currentTimecode,
     videoDuration,
     videoFileSize,

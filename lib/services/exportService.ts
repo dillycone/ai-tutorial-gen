@@ -1,10 +1,12 @@
 import { PDFDocument, StandardFonts, rgb, PDFName, PDFString } from "pdf-lib";
 import type { PDFImage, PDFRef } from "pdf-lib";
-import { SchemaType } from "@/lib/types";
+import type { MeetingSummaryResult, SchemaType, TutorialResult } from "@/lib/types";
 import type { ExportOptions, ExportImageOptions, ExportDocumentOptions } from "@/lib/types/api";
+import { normalizeResultForTemplate } from "@/lib/results";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { getSchemaTemplateById } from "@/lib/schemaTemplates";
 
 // Page and style constants
 const PAGE_WIDTH = 612; // 8.5in * 72dpi
@@ -212,10 +214,17 @@ export type ShotForExport = {
   dataUrl: string;
 };
 
+type StructuredResultInput = {
+  templateId: string;
+  data: Record<string, unknown>;
+};
+
 export type ExportBuildArgs = {
   schemaType: SchemaType;
   enforceSchema: boolean;
-  resultText: string;
+  structuredResult?: StructuredResultInput;
+  rawText?: string;
+  legacyResultText?: string;
   shots: ShotForExport[];
   options?: ExportOptions;
 };
@@ -259,6 +268,69 @@ type MeetingSummarySchema = {
   followUps?: string[];
 };
 
+function toTutorialSchemaFromResult(result: TutorialResult): TutorialSchema {
+  const steps = Array.isArray(result.steps)
+    ? result.steps.map((step, index) => ({
+        index: index + 1,
+        title: step.stepTitle,
+        description: step.description,
+        startTimecode: step.timecodes?.start ?? undefined,
+        endTimecode: step.timecodes?.end ?? undefined,
+        screenshotIds: Array.isArray(step.screenshots) ? [...step.screenshots] : [],
+      }))
+    : [];
+
+  return {
+    title: result.title,
+    summary: result.summary,
+    prerequisites: Array.isArray(result.prerequisites) ? [...result.prerequisites] : [],
+    steps,
+  };
+}
+
+function toMeetingSummarySchemaFromResult(result: MeetingSummaryResult): MeetingSummarySchema {
+  return {
+    meetingTitle: result.meetingTitle,
+    meetingDate: result.meetingDate,
+    durationMinutes: typeof result.durationMinutes === "number" ? result.durationMinutes : undefined,
+    attendees: Array.isArray(result.attendees)
+      ? result.attendees.map((attendee) => ({
+          name: attendee.name,
+          role: attendee.role,
+          department: attendee.department,
+        }))
+      : [],
+    summary: result.summary,
+    keyTopics: Array.isArray(result.keyTopics)
+      ? result.keyTopics.map((topic, index) => ({
+          order: typeof topic.order === "number" ? topic.order : index + 1,
+          title: topic.title,
+          details: topic.details,
+          startTimecode: topic.startTimecode,
+          endTimecode: topic.endTimecode,
+          speaker: topic.speaker,
+        }))
+      : [],
+    decisions: Array.isArray(result.decisions)
+      ? result.decisions.map((decision) => ({
+          description: decision.description,
+          owners: Array.isArray(decision.owners) ? [...decision.owners] : undefined,
+          status: decision.status,
+          timecode: decision.timecode,
+        }))
+      : [],
+    actionItems: Array.isArray(result.actionItems)
+      ? result.actionItems.map((item) => ({
+          task: item.task,
+          owner: item.owner,
+          dueDate: item.dueDate,
+          timecode: item.timecode,
+        }))
+      : [],
+    followUps: Array.isArray(result.followUps) ? [...result.followUps] : [],
+  };
+}
+
 type EmbeddedShot = {
   shot: ShotForExport;
   image: PDFImage;
@@ -291,7 +363,19 @@ type PageState = {
 };
 
 export async function buildPdfBuffer(args: ExportBuildArgs): Promise<ExportResult> {
-  const { schemaType, enforceSchema, resultText, shots } = args;
+  const { schemaType, enforceSchema, structuredResult, rawText, legacyResultText, shots } = args;
+
+  const templateId = structuredResult?.templateId ?? schemaType;
+
+  let schemaTemplateName = templateId === "meetingSummary" ? "Meeting Summary" : "Tutorial";
+  try {
+    const template = await getSchemaTemplateById(templateId);
+    if (template?.name) {
+      schemaTemplateName = template.name.trim();
+    }
+  } catch {
+    // ignore missing template lookups
+  }
 
   const doc = await PDFDocument.create();
   const { regular, bold, italic } = await loadPreferredFonts(doc);
@@ -319,30 +403,80 @@ export async function buildPdfBuffer(args: ExportBuildArgs): Promise<ExportResul
   let state = addPage(ctx);
 
   // Decide a running title for footers
-  let runningTitle = schemaType === "tutorial" ? "Tutorial Guide" : "Meeting Summary";
+  const defaultRunningTitle = templateId === "tutorial" ? `${schemaTemplateName} Guide` : schemaTemplateName;
+  let runningTitle = defaultRunningTitle;
 
-  // Lenient JSON parsing to improve robustness against minor formatting issues
+  let fallbackText = typeof rawText === "string" && rawText.trim().length > 0
+    ? rawText
+    : typeof legacyResultText === "string"
+    ? legacyResultText
+    : "";
+
+  let tutorialCandidate: TutorialSchema | null = null;
+  let meetingCandidate: MeetingSummarySchema | null = null;
+
+  if (structuredResult) {
+    const normalized = normalizeResultForTemplate(structuredResult.templateId, structuredResult.data);
+    if (normalized.data && normalized.valid) {
+      if (structuredResult.templateId === "tutorial") {
+        tutorialCandidate = toTutorialSchemaFromResult(normalized.data as TutorialResult);
+      } else if (structuredResult.templateId === "meetingSummary") {
+        meetingCandidate = toMeetingSummarySchemaFromResult(normalized.data as MeetingSummaryResult);
+      } else if (!fallbackText.trim()) {
+        try {
+          fallbackText = JSON.stringify(normalized.data, null, 2);
+        } catch {
+          /* ignore stringify errors */
+        }
+      }
+    } else {
+      if (normalized.errors.length) {
+        const detail = normalized.errors.slice(0, 3).join("; ");
+        warnings.push(`Structured result invalid for template ${structuredResult.templateId}: ${detail}`);
+      }
+      if (!fallbackText.trim() && normalized.data) {
+        try {
+          fallbackText = JSON.stringify(normalized.data, null, 2);
+        } catch {
+          /* ignore stringify errors */
+        }
+      }
+    }
+  }
+
+  let parsedFromString: TutorialSchema | MeetingSummarySchema | null = null;
+  if (!tutorialCandidate && !meetingCandidate && fallbackText.trim().length > 0) {
+    const attempt = parseJsonLenient<TutorialSchema | MeetingSummarySchema>(fallbackText);
+    parsedFromString = attempt.value;
+    fallbackText = attempt.cleaned;
+  }
+
   let parsed: TutorialSchema | MeetingSummarySchema | null = null;
-  const attempt = parseJsonLenient<TutorialSchema | MeetingSummarySchema>(resultText);
-  parsed = attempt.value;
+  if (templateId === "tutorial") {
+    parsed = tutorialCandidate ?? (parsedFromString && isTutorial(parsedFromString) ? parsedFromString : null);
+  } else if (templateId === "meetingSummary") {
+    parsed = meetingCandidate ?? (parsedFromString && isMeetingSummary(parsedFromString) ? parsedFromString : null);
+  } else {
+    parsed = parsedFromString;
+  }
 
   // Suggested filename based on parsed content
   let suggestedName: string | undefined;
 
-  if (schemaType === "tutorial" && parsed && isTutorial(parsed)) {
+  if (templateId === "tutorial" && parsed && isTutorial(parsed)) {
     if (parsed.title && parsed.title.trim()) {
       suggestedName = parsed.title.trim();
       runningTitle = parsed.title.trim();
     }
     state = renderTutorial(ctx, state, parsed);
-  } else if (schemaType === "meetingSummary" && parsed && isMeetingSummary(parsed)) {
+  } else if (templateId === "meetingSummary" && parsed && isMeetingSummary(parsed)) {
     if (parsed.meetingTitle && parsed.meetingTitle.trim()) {
       suggestedName = parsed.meetingTitle.trim();
       runningTitle = parsed.meetingTitle.trim();
     }
     state = renderMeetingSummary(ctx, state, parsed);
   } else {
-    state = renderFallback(ctx, state, resultText, schemaType, enforceSchema);
+    state = renderFallback(ctx, state, fallbackText, defaultRunningTitle, enforceSchema);
   }
 
   if (ctx.docOptions.includeAppendix && ctx.embeddedShots.size > 0) {
@@ -554,10 +688,10 @@ function renderFallback(
   ctx: PdfContext,
   state: PageState,
   resultText: string,
-  schemaType: SchemaType,
+  displayName: string,
   enforceSchema: boolean,
 ) {
-  state = drawTitle(ctx, state, schemaType === "tutorial" ? "Tutorial" : "Meeting Summary");
+  state = drawTitle(ctx, state, displayName);
   if (enforceSchema) {
     state = drawParagraph(ctx, state, "Structured output could not be parsed. Showing raw response:", BODY_SIZE);
   }

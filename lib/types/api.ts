@@ -143,10 +143,20 @@ export type ExportOptions = {
   image?: ExportImageOptions;
 };
 
+export type StructuredExportPayload = {
+  templateId: string;
+  data: Record<string, unknown>;
+};
+
 export type ExportRequestBody = {
   schemaType: SchemaType;
   enforceSchema: boolean;
-  resultText: string;
+  structuredResult?: StructuredExportPayload;
+  rawText?: string;
+  /**
+   * @deprecated Use rawText instead. Kept for backward compatibility with older clients.
+   */
+  resultText?: string;
   shots: ExportShotIn[];
   options?: ExportOptions;
 };

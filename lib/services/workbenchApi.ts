@@ -1,7 +1,7 @@
 // lib/services/workbenchApi.ts
 
 import type { GeminiFileRef } from "@/lib/geminiUploads";
-import type { PromptOptimizationMeta } from "@/lib/types";
+import type { PromptOptimizationMeta, SchemaTemplate, SchemaTemplateInput } from "@/lib/types";
 import type {
   ExportRequestBody,
   GenerateRequestBody,
@@ -194,4 +194,42 @@ export async function exportStructuredPdf(body: ExportRequestBody): Promise<Expo
   const blob = await response.blob();
 
   return { blob, warnings, filename };
+}
+
+export async function fetchSchemaTemplates(): Promise<SchemaTemplate[]> {
+  const response = await fetch("/api/schemas", {
+    method: "GET",
+  });
+
+  const payload = (await parseJson<{ templates?: SchemaTemplate[]; error?: string }>(response)) as {
+    templates?: SchemaTemplate[];
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to load schema templates");
+  }
+
+  return Array.isArray(payload.templates) ? payload.templates : [];
+}
+
+export async function createSchemaTemplateViaApi(payload: SchemaTemplateInput): Promise<SchemaTemplate> {
+  const response = await fetch("/api/schemas", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+
+  const json = (await parseJson<{ template?: SchemaTemplate; error?: string }>(response)) as {
+    template?: SchemaTemplate;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(json.error || "Failed to create schema template");
+  }
+  if (!json.template) {
+    throw new Error("Schema template response missing template payload");
+  }
+  return json.template;
 }

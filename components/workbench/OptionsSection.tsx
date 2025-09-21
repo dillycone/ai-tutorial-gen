@@ -2,7 +2,7 @@
 "use client";
 
 import { BusyPhase } from "@/hooks/useVideoWorkbench";
-import { PromptMode, PromptOptimizationMeta, SchemaType } from "@/lib/types";
+import { PromptMode, PromptOptimizationMeta, SchemaTemplate, SchemaTemplateInput, SchemaType } from "@/lib/types";
 import Spinner from "./Spinner";
 import { useMemo } from "react";
 
@@ -50,6 +50,10 @@ type OptionsSectionProps = {
   promptMode: PromptMode;
   setPromptMode: (value: PromptMode) => void;
   promptMeta: PromptOptimizationMeta | null;
+  schemaTemplates: SchemaTemplate[];
+  schemaTemplatesLoading: boolean;
+  schemaTemplatesError: string | null;
+  onCreateSchemaTemplate: (input: SchemaTemplateInput) => Promise<SchemaTemplate>;
   showAdvanced: boolean;
   setShowAdvanced: (value: boolean) => void;
   promoteBaseline: boolean;
@@ -69,6 +73,10 @@ export default function OptionsSection({
   promptMode,
   setPromptMode,
   promptMeta,
+  schemaTemplates,
+  schemaTemplatesLoading,
+  schemaTemplatesError,
+  onCreateSchemaTemplate,
   showAdvanced,
   setShowAdvanced,
   promoteBaseline,
@@ -78,13 +86,29 @@ export default function OptionsSection({
   onGenerate,
 }: OptionsSectionProps) {
   const schemaDocs = "https://ai.google.dev/gemini-api/docs";
-  const titlePlaceholder = useMemo(
-    () =>
-      schemaType === "tutorial"
-        ? "Optional hint (e.g., How to set up product launch workspace)"
-        : "Optional meeting title hint (e.g., Q3 OKR Planning)",
-    [schemaType]
+  const selectedTemplate = useMemo(
+    () => schemaTemplates.find((template) => template.id === schemaType) ?? null,
+    [schemaTemplates, schemaType],
   );
+  const titlePlaceholder = useMemo(() => {
+    if (!selectedTemplate) {
+      return "Optional hint for Gemini";
+    }
+    if (selectedTemplate.id === "tutorial") {
+      return "Optional hint (e.g., How to set up product launch workspace)";
+    }
+    if (selectedTemplate.id === "meetingSummary") {
+      return "Optional meeting title hint (e.g., Q3 OKR Planning)";
+    }
+    const label = selectedTemplate.hintLabel || "title";
+    return `Optional ${label.toLowerCase()} hint`;
+  }, [selectedTemplate]);
+
+  const hintLabelTitle = useMemo(() => {
+    const label = selectedTemplate?.hintLabel?.trim();
+    if (!label) return "Title";
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }, [selectedTemplate]);
 
   return (
     <TooltipProvider>
@@ -137,12 +161,16 @@ export default function OptionsSection({
             setSchemaType={setSchemaType}
             enforceSchema={enforceSchema}
             setEnforceSchema={setEnforceSchema}
+            templates={schemaTemplates}
+            loading={schemaTemplatesLoading}
+            error={schemaTemplatesError}
+            onCreateTemplate={onCreateSchemaTemplate}
           />
 
           {/* Title Hint Input */}
           <TextField
             id="title-hint"
-            label="Title Hint"
+            label={`${hintLabelTitle} Hint`}
             value={titleHint}
             onChange={setTitleHint}
             placeholder={titlePlaceholder}
@@ -191,7 +219,7 @@ export default function OptionsSection({
             ) : (
               <>
                 <Zap className="size-4" />
-                {schemaType === "tutorial" ? "Generate Tutorial" : "Generate Meeting Summary"}
+                {selectedTemplate ? `Generate ${selectedTemplate.name}` : "Generate"}
               </>
             )}
           </Button>

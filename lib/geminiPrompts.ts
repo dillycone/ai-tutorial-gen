@@ -1,68 +1,8 @@
 // lib/geminiPrompts.ts
 import fs from "fs";
 import { dirname, join } from "path";
-import { MeetingSummarySchema, TutorialSchema } from "@/lib/schema";
-import { SchemaType } from "@/lib/types";
-
-type SchemaConfig = {
-  persona: string;
-  requirements: string;
-  fallbackOutput: string;
-  schema: unknown;
-  hintLabel: string;
-  styleGuide?: string;
-};
-
-const MEETING_SCHEMA_CONFIG: SchemaConfig = {
-  persona:
-    "You are an expert meeting scribe. Analyze the video and provided named screenshots to build an executive-ready meeting summary.",
-  requirements: [
-    "- Capture the precise meeting title and ensure it is professional.",
-    "- Provide the meeting date in YYYY-MM-DD format (infer from context; if unclear, use your best estimate).",
-    "- Summarize the meeting in two to three sentences covering intent and outcome.",
-    "- List attendees with roles or departments when mentioned.",
-    "- Identify each key topic in chronological order with concise details and relevant speakers/timecodes.",
-    "- Record decisions with current status and owners when discussed.",
-    "- Capture action items with owners and due dates if provided.",
-    "- Note other follow-ups only if they do not fit decisions or action items.",
-  ].join("\n"),
-  fallbackOutput:
-    "Return well-structured Markdown that clearly labels sections: Meeting Title, Meeting Date, Summary, Attendees, Key Topics, Decisions, Action Items, Follow Ups.",
-  schema: MeetingSummarySchema,
-  hintLabel: "meeting title",
-};
-
-const TUTORIAL_SCHEMA_CONFIG: SchemaConfig = {
-  persona:
-    "You are an expert technical writer.",
-  requirements: [
-    "- Analyze the video and the provided named screenshots to produce a complete, detailed, comprehensive step-by-step tutorial.",
-    "- Focus strictly on observable actions and visual cues present in the video.",
-    "- Provide a short, descriptive title and a 2-3 sentence summary for the tutorial.",
-    "- Include any necessary prerequisites.",
-    "- Return steps in the exact chronological order they should be performed.",
-    "- For each step: include a concise title, a clear, actionable description, and (if evident) precise start/end timecodes from the video.",
-    "- Explicitly reference the provided screenshot IDs (s1, s2, s3, s4, s5, s6, s7) exactly as given, matching them to the most relevant step(s) based on their content and timecodes.",
-    "- Ensure descriptions are actionable, specific, and directly grounded in both the video actions and the content of the captured screenshots.",
-    "- Utilize screenshot timecodes (e.g., s1 @01:32) to reinforce chronological ordering and relevance of steps.",
-    "- The final tutorial MUST be returned as STRICT JSON. The JSON structure should include top-level keys for 'title' (string), 'summary' (string), 'prerequisites' (an array of strings), and 'steps' (an array of objects). Each step object must contain 'stepTitle' (string), 'description' (string), 'timecodes' (an object with 'start' and 'end' strings, if available), and 'screenshots' (an array of strings, listing relevant screenshot IDs). Ensure all JSON is valid and well-formatted.",
-    "- Provide in-depth explanations for non-trivial steps: include the purpose, expected outcome, and any relevant context behind the action.",
-    "- When settings, parameters, or UI choices are visible, briefly justify why they are chosen and note viable alternatives when applicable.",
-    "- Call out common pitfalls, warnings, and troubleshooting tips inline where relevant to help users avoid errors.",
-    "- Define or clarify domain-specific terms encountered in the interface the first time they appear.",
-    "- Where helpful, connect actions to broader workflows or best practices to enhance the tutorial's educational value."
-  ].join("\n"),
-  fallbackOutput:
-    "If JSON output is not possible, return a well-structured Markdown tutorial with numbered steps. When placing images, include lines like: [screenshots: s3, s5].",
-  schema: TutorialSchema,
-  hintLabel: "title",
-  styleGuide: "Maintain a clear, thorough, and professional tone. Prioritize completeness and educational clarity over brevity. Use active voice. Avoid unnecessary jargon; define key terms when first introduced. When helpful, include brief rationale, context, and warnings within step descriptions. Ensure all instructions are unambiguous and reproducible.",
-};
-
-const CONFIG_MAP: Record<SchemaType, SchemaConfig> = {
-  tutorial: TUTORIAL_SCHEMA_CONFIG,
-  meetingSummary: MEETING_SCHEMA_CONFIG,
-};
+import { getSchemaTemplateById } from "@/lib/schemaTemplates";
+import type { SchemaTemplate, SchemaType } from "@/lib/types";
 
 const OVERRIDE_PATH = (() => {
   if (process.env.PROMPT_OVERRIDE_PATH) {
@@ -148,7 +88,20 @@ async function writeOverridesAtomic(overrides: PromptOverrides): Promise<void> {
   }
 }
 
-function applyOverride(base: SchemaConfig, override?: PromptOverrideEntry): SchemaConfig {
+function cloneTemplate(template: SchemaTemplate): SchemaTemplate {
+  let schemaCopy: unknown = template.schema;
+  try {
+    schemaCopy = JSON.parse(JSON.stringify(template.schema ?? {}));
+  } catch {
+    // leave schema as-is if cloning fails
+  }
+  return {
+    ...template,
+    schema: schemaCopy,
+  };
+}
+
+function applyOverride(base: SchemaTemplate, override?: PromptOverrideEntry): SchemaTemplate {
   if (!override) {
     return base;
   }
@@ -161,10 +114,18 @@ function applyOverride(base: SchemaConfig, override?: PromptOverrideEntry): Sche
   };
 }
 
-export async function getSchemaConfig(type: SchemaType) {
-  const base = CONFIG_MAP[type];
+async function resolveBaseTemplate(type: SchemaType): Promise<SchemaTemplate> {
+  const template = await getSchemaTemplateById(type);
+  if (!template) {
+    throw new Error(`Unknown schema template: ${String(type)}`);
+  }
+  return cloneTemplate(template);
+}
+
+export async function getSchemaConfig(type: SchemaType): Promise<SchemaTemplate> {
+  const base = await resolveBaseTemplate(type);
   const overrides = await readOverrides();
-  return applyOverride({ ...base }, overrides[type]);
+  return applyOverride(base, overrides[type]);
 }
 
 export async function promoteBaselinePrompt(
